@@ -7,7 +7,7 @@ name = "mistode"
 version = "0.1.0"
 description = "Python and C code obfuscation tool"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [
     { name = "for13to1", email = "for13to1@outlook.com" }
 ]
@@ -19,8 +19,6 @@ classifiers = [
     "Topic :: Security",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

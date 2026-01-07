@@ -5,17 +5,20 @@ Thank you for your interest in the Mistode project! We welcome contributions of 
 ## Development Environment Setup
 
 1. Clone the project:
+
    ```shell
    git clone https://github.com/for13to1/mistode.git
    cd mistode
    ```
 
 2. Install development dependencies:
+
    ```shell
    pip install -e ".[dev]"
    ```
 
 3. Run tests:
+
    ```shell
    pytest tests/ -v
    ```

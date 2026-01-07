@@ -5,7 +5,7 @@
 If you discover a security vulnerability, please report it via the following methods:
 
 - **Do NOT** report security issues in public Issues.
-- Please contact the maintainer via email: for13to1@outlook.com
+- Please contact the maintainer via email: <for13to1@outlook.com>
 
 ## Response Time
 

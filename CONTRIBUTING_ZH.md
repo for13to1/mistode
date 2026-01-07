@@ -5,17 +5,20 @@
 ## 开发环境设置
 
 1. 克隆项目：
+
    ```shell
    git clone https://github.com/for13to1/mistode.git
    cd mistode
    ```
 
 2. 安装开发依赖：
+
    ```shell
    pip install -e ".[dev]"
    ```
 
 3. 运行测试：
+
    ```shell
    pytest tests/ -v
    ```

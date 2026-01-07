@@ -440,9 +440,8 @@ class CObfuscator:
             "encryption_key": self.mm.encryption_key,
             "string_quote_types": self.mm.string_quote_types,
         }
-        encoded = base64.b64encode(
-            json.dumps(mapping_info).encode("utf-8")
-        ).decode("utf-8")
+        json_bytes = json.dumps(mapping_info).encode("utf-8")
+        encoded = base64.b64encode(json_bytes).decode("utf-8")
 
         # 4. Inject Original Source (Lossless restoration)
         obfuscated_text = "".join(output)

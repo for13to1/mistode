@@ -6,29 +6,32 @@
 [![Tests](https://github.com/for13to1/mistode/actions/workflows/ci.yml/badge.svg)](https://github.com/for13to1/mistode/actions)
 [![Coverage](https://codecov.io/gh/for13to1/mistode/branch/main/graph/badge.svg)](https://codecov.io/gh/for13to1/mistode)
 
+**🌐 Languages:**
+[![English](https://img.shields.io/badge/English-README-blue)](README.md)
+[![中文](https://img.shields.io/badge/中文-README_ZH-red)](README_ZH.md)
+
 Mistode (Mist Code, pronounced like "Miss Told") is a lightweight code obfuscation tool supporting Python and C. It focuses on making code difficult to read while maintaining functional integrity.
 
 ## Features
 
 - **Encrypted Token Generator**: Highly customizable encrypted token generation supporting various configurations:
-    - **Random Seed**: Supports setting a random seed to ensure reproducibility.
-    - **Length Control**: Custom token length, range [8, 32] characters.
-    - **Style Configuration**: Supports two obfuscation styles:
-        - **Similar Character Style**: Uses visually similar character groups to enhance obfuscation (e.g., `Oo0`, `iIlL1`, `b6B8`, `Zz2`, `Ss5`).
-        - **Random Character Style**: Uses random alphanumeric combinations.
-    - **Smart Deduplication**: Automatically maintains a set of generated tokens to avoid duplicates.
-    - **Safe First Character**: Ensures the first character is not a digit, complying with naming conventions.
+  - **Random Seed**: Supports setting a random seed to ensure reproducibility.
+  - **Length Control**: Custom token length, range [8, 32] characters.
+  - **Style Configuration**: Supports two obfuscation styles:
+    - **Similar Character Style**: Uses visually similar character groups to enhance obfuscation (e.g., `Oo0`, `iIlL1`, `b6B8`, `Zz2`, `Ss5`).
+    - **Random Character Style**: Uses random alphanumeric combinations.
+  - **Smart Deduplication**: Automatically maintains a set of generated tokens to avoid duplicates.
 - **Python Support**:
-    - **AST Parsing**: Accurate obfuscation based on Abstract Syntax Trees, ensuring complete preservation of code format.
-    - **Smart Identifier Classification**: Automatically identifies and preserves imported modules, functions, and built-in methods.
-    - **Docstring Obfuscation**: Replaces docstrings with hash values.
-    - **Fully Reversible**: Supports full restoration using generated key files or embedded metadata.
-    - **Lossless Restoration**: Achieves lossless consistency with the original file (preserving all comments and formatting) via distributed annotated injection of source chunks.
+  - **AST Parsing**: Accurate obfuscation based on Abstract Syntax Trees, ensuring complete preservation of code format.
+  - **Smart Identifier Classification**: Automatically identifies and preserves imported modules, functions, and built-in methods.
+  - **Docstring Obfuscation**: Replaces docstrings with hash values.
+  - **Fully Reversible**: Supports full restoration using generated key files or embedded metadata.
+  - **Lossless Restoration**: Achieves lossless consistency with the original file (preserving all comments and formatting) via distributed annotated injection of source chunks.
 - **C Support**:
-    - **Fast Tokenization**: Uses robust regular expression tokenizers.
-    - **Comment Obfuscation**: Obfuscates `//` and `/* */` comment content.
-    - **Compilation Safety**: Preserves keywords, preprocessor directives, and string literals (ensuring safety).
-    - **Lossless Restoration**: Achieves lossless consistency with the original file via distributed annotated injection of source chunks.
+  - **Fast Tokenization**: Uses robust regular expression tokenizers.
+  - **Comment Obfuscation**: Obfuscates `//` and `/* */` comment content.
+  - **Compilation Safety**: Preserves keywords, preprocessor directives, and string literals (ensuring safety).
+  - **Lossless Restoration**: Achieves lossless consistency with the original file via distributed annotated injection of source chunks.
 
 ## Installation
 
@@ -73,6 +76,7 @@ Mistode intelligently identifies and avoids obfuscating the following types of i
 ### Example
 
 **Original Code**:
+
 ```python
 import re
 from openpyxl.utils import get_column_letter, column_index_from_string
@@ -85,6 +89,7 @@ def shift_column_letter(base_column, offset):
 ```
 
 **Obfuscated Code**:
+
 ```python
 import re
 from openpyxl.utils import get_column_letter, column_index_from_string
@@ -103,8 +108,8 @@ def Oo0iIlL1b6B8Zz2Ss5(Oo0iIlL1b6B8Zz2Ss6, Oo0iIlL1b6B8Zz2Ss7):
 
 Mistode uses a two-layer restoration mechanism:
 
-1.  **Distributed Source Chunks (`#@mistode:chunk:` or `// @mistode:chunk:`)**: The original source code is compressed, encoded, and injected as chunks before each line of the obfuscated code. Restoration prioritizes these chunks to reconstruct the original code, achieving **lossless restoration** (including all comments, empty lines, and formatting).
-2.  **Embedded Metadata (`#@mistode:metadata:`)**: Contains the identifier mapping table as a backup restoration method.
+1. **Distributed Source Chunks (`#@mistode:chunk:` or `// @mistode:chunk:`)**: The original source code is compressed, encoded, and injected as chunks before each line of the obfuscated code. Restoration prioritizes these chunks to reconstruct the original code, achieving **lossless restoration** (including all comments, empty lines, and formatting).
+2. **Embedded Metadata (`#@mistode:metadata:`)**: Contains the identifier mapping table as a backup restoration method.
 
 This means you can perfectly restore the original code even without keeping the key file.
 
@@ -119,7 +124,7 @@ If no key file is provided, the restore command automatically detects and uses t
 
 ## Project Structure
 
-```
+```shell
 mistode/
 ├── src/
 │   └── mistode/
