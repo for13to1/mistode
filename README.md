@@ -62,6 +62,37 @@ mistode obfuscate input.py --out output.py --key mapping.json
 mistode restore output.py --out restored.py --key mapping.json
 ```
 
+### Configuration File
+
+You can set default options in `pyproject.toml` to avoid repeating the same arguments:
+
+```toml
+[tool.mistode]
+style = "similar"    # Default obfuscation style ("similar" or "random")
+length = 16          # Default token length (8-32)
+stats = true         # Always show statistics
+# seed = 42          # Optional: set a default seed for reproducibility
+```
+
+**How it works**:
+
+- Mistode automatically searches for `pyproject.toml` in the current directory and parent directories
+- If found, settings from `[tool.mistode]` are used as defaults
+- Command-line arguments always override configuration file settings
+
+**Example**:
+
+```bash
+# With the config above, these are equivalent:
+mistode o input.py
+mistode o input.py --style similar --length 16 --stats
+
+# Override config with command-line args:
+mistode o input.py --style random --length 20
+```
+
+For a complete guide, see [`examples/CONFIG_GUIDE.md`](examples/CONFIG_GUIDE.md).
+
 ## Advanced Features
 
 ### Smart Identifier Recognition for Python Obfuscation

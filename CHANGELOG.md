@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-01-08
+
+### Added
+
+- **CLI Improvements**:
+  - `--version` flag to display version and Python version information
+  - `--stats` flag for detailed obfuscation statistics
+    - Shows identifier counts (obfuscated vs preserved)
+    - Displays file size changes
+    - Indicates restoration method (key file vs embedded metadata)
+  - Configuration file support via `pyproject.toml`
+    - Set default values for `style`, `length`, `seed`, and `stats`
+    - Uses `[tool.mistode]` section
+    - Automatically searches current and parent directories
+
+- **Examples Directory**:
+  - Added `examples/` with comprehensive sample code
+  - Python calculator example (`calculator.py`)
+  - C calculator example (`calculator.c`)
+  - Detailed usage documentation in `examples/README.md`
+
+- **Documentation**:
+  - Created comprehensive example usage guide
+  - Added configuration file documentation
+
+### Changed
+
+- **Enhanced Error Messages**:
+  - User-friendly error formatting with emoji icons (❌ for errors, 💡 for hints)
+  - Specific troubleshooting hints for common issues
+  - Better handling of file not found, permission denied, and encoding errors
+  - Improved key file error messages with suggestions
+
+### Fixed
+
+- Fixed installation command in `README_ZH.md` (changed from `pip install .` to `pip install mistode`)
+
 ## [0.1.0] - 2026-01-08
 
 ### Added

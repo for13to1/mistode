@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mistode"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python and C code obfuscation tool"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -73,3 +73,11 @@ mistode = "mistode.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mistode"]
+
+## Mistode Configuration Example
+## Disable comments below to enable custom default values
+# [tool.mistode]
+# style = "random"      # Use random style instead of default similar
+# length = 20           # Use 20 character length instead of default 16
+# stats = true          # Always show statistics
+# seed = 42             # Optional: Fixed random seed

@@ -36,7 +36,7 @@ Mistode (Mist Code, pronounced like "Miss Told") 是一个轻量级的代码混�
 ## 安装
 
 ```shell
-pip install .
+pip install mistode
 ```
 
 ## 使用方法
@@ -61,6 +61,37 @@ mistode obfuscate input.py --out output.py --key mapping.json
 # 使用显式选项进行恢复
 mistode restore output.py --out restored.py --key mapping.json
 ```
+
+### 配置文件
+
+您可以在 `pyproject.toml` 中设置默认选项，避免重复输入相同的参数：
+
+```toml
+[tool.mistode]
+style = "similar"    # 默认混淆风格（"similar" 或 "random"）
+length = 16          # 默认 token 长度（8-32）
+stats = true         # 总是显示统计信息
+# seed = 42          # 可选：设置默认随机种子以获得可重现结果
+```
+
+**工作原理**：
+
+- Mistode 自动在当前目录和父目录中搜索 `pyproject.toml`
+- 如果找到，`[tool.mistode]` 中的设置将作为默认值使用
+- 命令行参数始终会覆盖配置文件设置
+
+**示例**：
+
+```bash
+# 使用上述配置，以下两个命令等效：
+mistode o input.py
+mistode o input.py --style similar --length 16 --stats
+
+# 使用命令行参数覆盖配置：
+mistode o input.py --style random --length 20
+```
+
+完整指南请参阅 [`examples/CONFIG_GUIDE.md`](examples/CONFIG_GUIDE.md)。
 
 ## 高级特性
 
