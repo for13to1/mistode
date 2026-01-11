@@ -22,16 +22,20 @@ import base64
 import builtins
 import json
 import keyword
+import tokenize
 import zlib
-from typing import Dict, Optional, Set, cast
+from io import StringIO
+from typing import Dict, Optional, Set, Tuple, cast
 
 from .core import MappingManager, NameGenerator
+from .encrypt import EncryptionManager
+from .layout import LayoutEngine
 
 
 class ImportAnalyzer:
     """
-    Import Statement Analyzer - Identifies identifiers that should not be
-    obfuscated
+    Import Analyzer - Identifies identifiers that should not be obfuscated,
+    including imported names, built-ins, and other protected identifiers
     """
 
     def __init__(self) -> None:
@@ -93,6 +97,7 @@ class PythonObfuscator:
 
         self.import_analyzer = ImportAnalyzer()
         self._cached_tree: Optional[ast.AST] = None
+        self.preserved_keywords: Set[str] = set()
 
         self.mapping_records: Dict[str, str | Dict[str, str]] = {
             "identifier_mapping": {},
@@ -100,6 +105,7 @@ class PythonObfuscator:
             "string_prefixes": {},
             "quote_types": {},
             "original_to_unparsed": {},
+            "ordered_identifiers": [],
         }
 
     def obfuscate(
@@ -107,24 +113,35 @@ class PythonObfuscator:
         source_code: str,
         mapping_file: Optional[str] = None,
         embed_metadata: bool = True,
+        encryption_key: Optional[str] = None,
     ) -> str:
+        # Initialize encryption manager if key is provided
+        encryption_manager = (
+            EncryptionManager(encryption_key) if encryption_key else None
+        )
 
         tree = ast.parse(source_code)
         self._cached_tree = tree
 
         self.import_analyzer.analyze(tree)
 
-        # Transform the AST to obfuscate identifiers with proper scoping
-        transformed_tree = self._obfuscate_identifiers(tree)
+        # Collect all keyword arguments used in calls to prevent obfuscating external APIs
+        self._collect_preserved_keywords(tree)
 
-        # Generate the obfuscated code from the transformed AST
-        obfuscated_code = ast.unparse(transformed_tree)
+        # Collect replacements for identifiers based on AST analysis
+        replacements = self._collect_replacements(tree, source_code)
 
-        # Inject original source as distributed comments
-        obfuscated_code = self._inject_source_as_comments(source_code, obfuscated_code)
+        # Generate obfuscated code and layout data using token stream transformation
+        layout_engine = LayoutEngine()
+        obfuscated_code = layout_engine.obfuscate_token_stream(
+            source_code, replacements, encryption_manager
+        )
+
+        # Save layout data - NO LONGER NEEDED as it is interleaved
+        # self.mapping_records["layout_data"] = ...
 
         if embed_metadata:
-            metadata_comment = self._generate_metadata_comment()
+            metadata_comment = self._generate_metadata_comment(encryption_manager)
             obfuscated_code += f"\n\n{metadata_comment}"
 
         if mapping_file:
@@ -132,173 +149,209 @@ class PythonObfuscator:
 
         return obfuscated_code
 
-    def _inject_source_as_comments(self, source_code: str, obfuscated_code: str) -> str:
-        compressed = zlib.compress(source_code.encode("utf-8"))
-        encoded = base64.b64encode(compressed).decode("ascii")
+    def _collect_preserved_keywords(self, tree: ast.AST) -> None:
+        """
+        Collect all argument names used as keywords in calls.
+        These must be preserved to avoid breaking external libraries matching.
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for kw in node.keywords:
+                    if kw.arg:
+                        self.preserved_keywords.add(kw.arg)
 
-        lines = obfuscated_code.splitlines()
-        if not lines:
-            return obfuscated_code
+    def _collect_replacements(
+        self, tree: ast.AST, source_code: str
+    ) -> Dict[Tuple[int, int], str]:
+        """
+        Traverse the AST to collect identifier replacements (line, col) -> new_name.
+        Uses token stream analysis to pinpoint exact locations of definitions.
+        """
+        replacements: Dict[Tuple[int, int], str] = {}
 
-        import math
-
-        total_length = len(encoded)
-        num_lines = len(lines)
-        chunk_size = math.ceil(total_length / num_lines)
-
-        new_lines = []
-        for i, line in enumerate(lines):
-            start = i * chunk_size
-            end = min((i + 1) * chunk_size, total_length)
-
-            if start >= total_length:
-                new_lines.append(line)
-                continue
-
-            chunk = encoded[start:end]
-            new_lines.append(f"#@mistode:chunk:{chunk}")
-            new_lines.append(line)
-
-        return "\n".join(new_lines)
-
-    def _extract_source_from_comments(self, obfuscated_code: str) -> Optional[str]:
-        chunks = []
-        lines = obfuscated_code.splitlines()
-        found_any = False
-
-        prefix = "#@mistode:chunk:"
-
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith(prefix):
-                chunk = stripped[len(prefix) :]
-                chunks.append(chunk)
-                found_any = True
-
-        if not found_any:
-            return None
-
+        # Pre-tokenize source for precise location finding
         try:
-            encoded = "".join(chunks)
-            compressed = base64.b64decode(encoded)
-            source_code = zlib.decompress(compressed).decode("utf-8")
-            return source_code
-        except Exception:
-            return None
+            tokens = list(tokenize.generate_tokens(StringIO(source_code).readline))
+        except tokenize.TokenError:
+            # Fallback for invalid code (shouldn't happen here)
+            tokens = []
 
-    def _obfuscate_identifiers(self, tree: ast.AST) -> ast.AST:
-        """
-        Transform the AST to obfuscate identifiers while properly handling scoping.
-        This method now uses a proper NodeVisitor/NodeTransformer approach.
-        """
-
-        class ObfuscationTransformer(ast.NodeTransformer):
-            def __init__(self, obfuscator):
+        class ReplacementCollector(ast.NodeVisitor):
+            def __init__(self, obfuscator, tokens):
                 self.obfuscator = obfuscator
-                self.scope_stack = []
+                self.tokens = tokens
 
-            def _process_arguments(self, args):
-                """
-                Process function argument obfuscation
-                """
-                original_args = []
-                for arg in args:
-                    original_args.append(arg.arg)
-                    if (
-                        arg.arg not in self.obfuscator.ignore_set
-                        and not arg.arg.startswith("_")
-                    ):
-                        arg.arg = self.obfuscator._generate_obfuscated_name(arg.arg)
-                return original_args
-
-            def visit_FunctionDef(self, node):
-                if (
-                    node.name not in self.obfuscator.ignore_set
-                    and not node.name.startswith("_")
-                ):
-                    original_name = node.name
-                    node.name = self.obfuscator._generate_obfuscated_name(original_name)
-
-                if (
-                    node.body
-                    and isinstance(node.body[0], ast.Expr)
-                    and isinstance(node.body[0].value, ast.Constant)
-                    and isinstance(node.body[0].value.value, str)
-                ):
-                    docstring_node = node.body[0].value
-                    original_doc = docstring_node.value
-                    if original_doc.strip() and not node.name.startswith("_"):
-                        obfuscated_doc = self.obfuscator._generate_obfuscated_docstring(
-                            original_doc
-                        )
-                        docstring_map: Dict[str, str] = cast(
-                            Dict[str, str],
-                            self.obfuscator.mapping_records["docstring_mapping"],
-                        )
-                        docstring_map[original_doc] = obfuscated_doc
-                        docstring_node.value = obfuscated_doc
-
-                original_args = self._process_arguments(node.args.args)
-                self.scope_stack.append(set(original_args))
-                node.body = [self.visit(item) for item in node.body]
-                self.scope_stack.pop()
-
-                return node
-
-            def visit_Lambda(self, node):
-                original_args = self._process_arguments(node.args.args)
-                self.scope_stack.append(set(original_args))
-                node.body = self.visit(node.body)
-                self.scope_stack.pop()
-                return node
-
-            def visit_arg(self, node):
-                return node
-
-            def visit_Name(self, node):
-                current_scope = set()
-                for scope in self.scope_stack:
-                    current_scope.update(scope)
-
-                should_obfuscate = (
-                    node.id not in self.obfuscator.ignore_set
-                    and not node.id.startswith("_")
-                    and not self.obfuscator.import_analyzer.is_imported_name(node.id)
-                    and not self.obfuscator.import_analyzer.is_imported_module(node.id)
+            def _should_obfuscate(self, name: str) -> bool:
+                return (
+                    name not in self.obfuscator.ignore_set
+                    and not name.startswith("_")
+                    and not self.obfuscator.import_analyzer.is_imported_name(name)
+                    and not self.obfuscator.import_analyzer.is_imported_module(name)
+                    and name not in self.obfuscator.preserved_keywords
                 )
 
-                if should_obfuscate:
-                    node.id = self.obfuscator._generate_obfuscated_name(node.id)
+            def _register_replacement(self, name: str, lineno: int, col_offset: int):
+                if not lineno:
+                    return
+                new_name = self.obfuscator._generate_obfuscated_name(name)
+                replacements[(lineno, col_offset)] = new_name
 
-                return node
+            def _find_def_name_location(
+                self,
+                node_lineno: int,
+                name: str,
+                is_class: bool = False,
+                is_async: bool = False,
+            ) -> Optional[Tuple[int, int]]:
+                """
+                Scan tokens starting from node_lineno to find the definition name.
+                Skips decorators, looks for 'def'/'class' keyword then the name.
+                """
+                # Find start index in tokens (approximate binary search or scan)
+                start_idx = 0
+                for i, tok in enumerate(self.tokens):
+                    if tok.start[0] >= node_lineno:
+                        start_idx = i
+                        break
+
+                # Scan forward
+                state = (
+                    "search_keyword"  # search_keyword -> found_keyword -> found_name
+                )
+                # Keyword to look for
+                target_keyword = "class" if is_class else "def"
+
+                for i in range(start_idx, len(self.tokens)):
+                    tok = self.tokens[i]
+                    if tok.type == tokenize.NAME:
+                        if state == "search_keyword":
+                            if tok.string == target_keyword:
+                                state = "found_keyword"
+                            elif tok.string == "async" and is_async and not is_class:
+                                pass  # Found async, next should be def
+                            # Else it might be a decorator name or something, skip
+                        elif state == "found_keyword":
+                            if tok.string == name:
+                                # Found exactly the name we want
+                                return tok.start
+                            # If we hit another keyword or unexpected token?
+                            # Example: def foo ( ...
+                            # 'foo' is NAME.
+                            pass
+                    elif tok.type == tokenize.OP:
+                        pass  # punctuation
+
+                    # Safety break if we go too far?
+                    # E.g. next definition starts?
+                    # But nested definitions exist.
+                    # Just rely on finding the specific name soon after keyword.
+
+                return None
+
+            def visit_FunctionDef(self, node):
+                if self._should_obfuscate(node.name):
+                    # Find exact location in token stream
+                    is_async = False  # Regular FunctionDef
+                    loc = self._find_def_name_location(
+                        node.lineno, node.name, is_class=False, is_async=is_async
+                    )
+                    if loc:
+                        self._register_replacement(node.name, loc[0], loc[1])
+
+                for arg in node.args.args:
+                    if self._should_obfuscate(arg.arg):
+                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+
+                for arg in node.args.kwonlyargs:
+                    if self._should_obfuscate(arg.arg):
+                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+
+                if node.args.vararg and self._should_obfuscate(node.args.vararg.arg):
+                    self._register_replacement(
+                        node.args.vararg.arg,
+                        node.args.vararg.lineno,
+                        node.args.vararg.col_offset,
+                    )
+
+                if node.args.kwarg and self._should_obfuscate(node.args.kwarg.arg):
+                    self._register_replacement(
+                        node.args.kwarg.arg,
+                        node.args.kwarg.lineno,
+                        node.args.kwarg.col_offset,
+                    )
+
+                self.generic_visit(node)
+
+            def visit_AsyncFunctionDef(self, node):
+                if self._should_obfuscate(node.name):
+                    loc = self._find_def_name_location(
+                        node.lineno, node.name, is_class=False, is_async=True
+                    )
+                    if loc:
+                        self._register_replacement(node.name, loc[0], loc[1])
+
+                # Visit body and args same as FunctionDef
+                # Copying arg visiting logic since AsyncFunctionDef has same structure
+                for arg in node.args.args:
+                    if self._should_obfuscate(arg.arg):
+                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+
+                for arg in node.args.kwonlyargs:
+                    if self._should_obfuscate(arg.arg):
+                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+
+                if node.args.vararg and self._should_obfuscate(node.args.vararg.arg):
+                    self._register_replacement(
+                        node.args.vararg.arg,
+                        node.args.vararg.lineno,
+                        node.args.vararg.col_offset,
+                    )
+
+                if node.args.kwarg and self._should_obfuscate(node.args.kwarg.arg):
+                    self._register_replacement(
+                        node.args.kwarg.arg,
+                        node.args.kwarg.lineno,
+                        node.args.kwarg.col_offset,
+                    )
+
+                self.generic_visit(node)
 
             def visit_ClassDef(self, node):
-                if (
-                    node.name not in self.obfuscator.ignore_set
-                    and not node.name.startswith("_")
-                ):
-                    node.name = self.obfuscator._generate_obfuscated_name(node.name)
-
+                if self._should_obfuscate(node.name):
+                    loc = self._find_def_name_location(
+                        node.lineno, node.name, is_class=True
+                    )
+                    if loc:
+                        self._register_replacement(node.name, loc[0], loc[1])
                 self.generic_visit(node)
-                return node
+
+            def visit_Name(self, node):
+                if isinstance(node.ctx, (ast.Store, ast.Load, ast.Del)):
+                    if self._should_obfuscate(node.id):
+                        self._register_replacement(
+                            node.id, node.lineno, node.col_offset
+                        )
+
+            def visit_arg(self, node):
+                if self._should_obfuscate(node.arg):
+                    self._register_replacement(node.arg, node.lineno, node.col_offset)
 
             def visit_Call(self, node):
-                if isinstance(node.func, ast.Name):
-                    func_name = node.func.id
-                    identifier_map = self.obfuscator.mapping_records[
-                        "identifier_mapping"
-                    ]
-
-                    if func_name in identifier_map:
-                        for kw_arg in node.keywords:
-                            if kw_arg.arg and kw_arg.arg in identifier_map:
-                                kw_arg.arg = identifier_map[kw_arg.arg]
-
+                for kw in node.keywords:
+                    if kw.arg and self._should_obfuscate(kw.arg):
+                        # kw.lineno/col_offset point to the argument name start
+                        self._register_replacement(kw.arg, kw.lineno, kw.col_offset)
                 self.generic_visit(node)
-                return node
 
-        transformer = ObfuscationTransformer(self)
-        return transformer.visit(tree)
+            def visit_Lambda(self, node):
+                for arg in node.args.args:
+                    if self._should_obfuscate(arg.arg):
+                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+                self.generic_visit(node)
+
+        collector = ReplacementCollector(self, tokens)
+        collector.visit(tree)
+        return replacements
 
     def _should_preserve_attribute(self, node: ast.Attribute) -> bool:
         base = node.value
@@ -380,18 +433,36 @@ class PythonObfuscator:
             "string_prefixes": self.mapping_records["string_prefixes"],
             "quote_types": self.mapping_records["quote_types"],
             "original_to_unparsed": self.mapping_records["original_to_unparsed"],
+            # "layout_data": self.mapping_records.get("layout_data", ""),  # Interleaved now
         }
 
-    def _generate_metadata_comment(self) -> str:
+    def _generate_metadata_comment(
+        self, encryption_manager: Optional[EncryptionManager] = None
+    ) -> str:
         mapping_info = self._get_mapping_info()
         json_str = json.dumps(mapping_info, ensure_ascii=False)
         compressed = zlib.compress(json_str.encode("utf-8"))
-        encoded = base64.b64encode(compressed).decode("ascii")
-        return f"#@mistode:metadata:{encoded}"
 
-    def _extract_metadata_from_code(self, code: str) -> Optional[Dict]:
+        if encryption_manager:
+            encoded = encryption_manager.encrypt(compressed)
+            return f"#@mistode:secure_metadata:{encoded}"
+        else:
+            encoded = base64.b64encode(compressed).decode("ascii")
+            return f"#@mistode:metadata:{encoded}"
+
+    def _extract_metadata_from_code(
+        self, code: str, encryption_manager: Optional[EncryptionManager] = None
+    ) -> Optional[Dict]:
         for line in code.splitlines():
-            if line.startswith("#@mistode:metadata:"):
+            if encryption_manager and line.startswith("#@mistode:secure_metadata:"):
+                try:
+                    encoded = line.split(":", 2)[2].strip()
+                    compressed = encryption_manager.decrypt(encoded)
+                    json_str = zlib.decompress(compressed).decode("utf-8")
+                    return json.loads(json_str)
+                except Exception:
+                    return None
+            elif not encryption_manager and line.startswith("#@mistode:metadata:"):
                 try:
                     encoded = line.split(":", 2)[2].strip()
                     compressed = base64.b64decode(encoded)
@@ -406,28 +477,27 @@ class PythonObfuscator:
         with open(mapping_file, "w", encoding="utf-8") as f:
             json.dump(mapping_info, f, indent=2, ensure_ascii=False)
 
-    def restore(self, mapping_file: str, obfuscated_code: Optional[str] = None) -> str:
+    def restore(
+        self,
+        mapping_file: str,
+        obfuscated_code: Optional[str] = None,
+        encryption_key: Optional[str] = None,
+    ) -> str:
         mapping_info = {}
+        encryption_manager = (
+            EncryptionManager(encryption_key) if encryption_key else None
+        )
+
         if mapping_file:
             with open(mapping_file, "r", encoding="utf-8") as f:
                 mapping_info = json.load(f)
 
         if obfuscated_code and not mapping_info:
-            extracted = self._extract_metadata_from_code(obfuscated_code)
+            extracted = self._extract_metadata_from_code(
+                obfuscated_code, encryption_manager
+            )
             if extracted:
                 mapping_info = extracted
-
-        if obfuscated_code:
-            original_source = self._extract_source_from_comments(obfuscated_code)
-            if original_source:
-                return original_source
-
-        if not mapping_info:
-            raise ValueError("No mapping provided via file or embedded metadata.")
-
-        identifier_mapping = mapping_info["identifier_mapping"]
-        reverse_mapping = {v: k for k, v in identifier_mapping.items()}
-        docstring_mapping = mapping_info.get("docstring_mapping", {})
 
         if obfuscated_code is None:
             if self._cached_tree is None:
@@ -437,66 +507,66 @@ class PythonObfuscator:
                 )
             obfuscated_code = ast.unparse(self._cached_tree)
 
-        tree = ast.parse(obfuscated_code)
+        if not mapping_info:
+            raise ValueError(
+                "No mapping provided via file or embedded metadata, "
+                "or decryption failed (incorrect key?)."
+            )
 
-        class RestorationTransformer(ast.NodeTransformer):
-            def __init__(self, reverse_mapping, docstring_mapping):
-                self.reverse_mapping = reverse_mapping
-                self.docstring_mapping = docstring_mapping
+        identifier_mapping = mapping_info.get("identifier_mapping", {})
+        reverse_mapping = {v: k for k, v in identifier_mapping.items()}
+        docstring_mapping = mapping_info.get("docstring_mapping", {})
 
-            def visit_FunctionDef(self, node):
-                if node.name in self.reverse_mapping:
-                    node.name = self.reverse_mapping[node.name]
+        # Strip metadata comment if present in the restoration input
+        # The LayoutEngine expects clean obfuscated code (or code matching the layout data exactly)
+        # However, obfuscate() appended metadata after the code.
+        # We need to remove the appended metadata part.
 
-                if (
-                    node.body
-                    and isinstance(node.body[0], ast.Expr)
-                    and isinstance(node.body[0].value, ast.Constant)
-                    and isinstance(node.body[0].value.value, str)
-                ):
-                    docstring_node = node.body[0].value
-                    obfuscated_doc = docstring_node.value
-                    # Look for the original docstring in the mapping
-                    for original, obfuscated in self.docstring_mapping.items():
-                        if obfuscated == obfuscated_doc:
-                            docstring_node.value = original
-                            break
+        clean_obfuscated_code = obfuscated_code
+        lines = obfuscated_code.splitlines(keepends=True)
+        # Metadata is likely at the end. Scan from end.
+        code_lines = []
+        found_data = False
+        for line in reversed(lines):
+            if line.strip().startswith("#@mistode:"):
+                found_data = True
+                continue  # Skip metadata line
+            if found_data and not line.strip():
+                # Skip the blank lines added before metadata?
+                # obfuscate adds: code + "\n\n" + metadata
+                # So we might see blank lines.
+                continue
 
-                for arg in node.args.args:
-                    if arg.arg in self.reverse_mapping:
-                        arg.arg = self.reverse_mapping[arg.arg]
+            # Once we hit non-metadata/non-blank, we stop skipping?
+            # But what if file naturally ended with blank lines?
+            # LayoutEngine preserved trailing whitespace of original.
+            # If we remove "added" blank lines, we are safe.
+            # But better safe: identifying specifically the block we added.
+            # We added `\n\n#@mistode...`
+            # So stripping ONLY lines that look like metadata or are blank AFTER metadata?
+            # Let's simplify: regex replace the metadata block.
+            found_data = False  # reset
+            code_lines.insert(0, line)
 
-                # Visit the function body
-                self.generic_visit(node)
-                return node
+        # Re-assemble only if we actually found/removed something?
+        # Actually, simpler:
+        if "#@mistode:" in obfuscated_code:
+            # find the index
+            idx = obfuscated_code.find("\n\n#@mistode:")
+            if idx != -1:
+                clean_obfuscated_code = obfuscated_code[:idx]
+            else:
+                # Try other format?
+                idx = obfuscated_code.find("#@mistode:")
+                if idx != -1:
+                    # If it was at start of line
+                    clean_obfuscated_code = obfuscated_code[:idx].rstrip()
 
-            def visit_Lambda(self, node):
-                # Restore lambda arguments
-                for arg in node.args.args:
-                    if arg.arg in self.reverse_mapping:
-                        arg.arg = self.reverse_mapping[arg.arg]
+        # Restore using LayoutEngine (Token Stream Restoration)
+        # layout_data = mapping_info.get("layout_data", "") # Not used anymore
+        layout_engine = LayoutEngine()
+        restored_code = layout_engine.restore_token_stream(
+            clean_obfuscated_code, reverse_mapping, encryption_manager
+        )
 
-                # Visit the lambda body
-                self.generic_visit(node)
-                return node
-
-            def visit_arg(self, node):
-                return node
-
-            def visit_Name(self, node):
-                if node.id in self.reverse_mapping:
-                    node.id = self.reverse_mapping[node.id]
-                return node
-
-            def visit_ClassDef(self, node):
-                if node.name in self.reverse_mapping:
-                    node.name = self.reverse_mapping[node.name]
-
-                self.generic_visit(node)
-                return node
-
-        transformer = RestorationTransformer(reverse_mapping, docstring_mapping)
-        restored_tree = transformer.visit(tree)
-
-        restored_code = ast.unparse(restored_tree)
         return restored_code

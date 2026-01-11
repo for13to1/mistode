@@ -98,7 +98,7 @@ def documented_function():
 
         # Verify docstring is obfuscated
         assert "This is a detailed docstring" not in obfuscated
-        assert "Obfuscated Docstring" in obfuscated
+        # assert "Obfuscated Docstring" in obfuscated  <-- Removed as we now use empty string/layout
 
     def test_builtin_methods_preservation(self, obfuscator):
         """
@@ -134,10 +134,12 @@ def complex_function(param1, param2):
         mapping_file = tmp_path / "test_mapping.json"
 
         # Obfuscate and save mapping file
-        obfuscator.obfuscate(source_code, str(mapping_file))
+        obfuscated_code = obfuscator.obfuscate(source_code, str(mapping_file))
 
         # Restore
-        restored = obfuscator.restore(str(mapping_file))
+        restored = obfuscator.restore(
+            str(mapping_file), obfuscated_code=obfuscated_code
+        )
 
         # Verify restored code is identical to original (ignoring leading/trailing
         # whitespace)

@@ -23,6 +23,7 @@ from typing import Optional, Union
 
 from .c import CObfuscator
 from .core import MappingManager, NameGenerator
+from .encrypt import EncryptionManager
 from .python import PythonObfuscator
 
 
@@ -44,8 +45,14 @@ class CLIError(Exception):
     pass
 
 
-class FileNotFoundError(CLIError):
-    pass
+class FileNotFound(CLIError):
+    """Custom FileNotFound to avoid conflict with built-in FileNotFoundError"""
+
+    def __init__(self, filepath: str = ""):
+        self.filepath = filepath
+        super().__init__(
+            f"File not found: {filepath}" if filepath else "File not found"
+        )
 
 
 class ObfuscationError(CLIError):
@@ -58,6 +65,7 @@ class Options:
     input_file: Path
     output_file: Optional[Path] = None
     key_file: Optional[Path] = None
+    password: Optional[str] = None
     seed: Optional[int] = None
     style: str = "similar"
     length: int = 16
@@ -69,9 +77,17 @@ class ObfuscationService:
     def __init__(self, options: Options):
         self.options = options
         self.mm = MappingManager()
-        self.gen = NameGenerator(
-            length=options.length, style=options.style, seed=options.seed
-        )
+        # If seed is not provided but password is, derive seed from password
+        seed = options.seed
+        if seed is None and options.password:
+            # Deterministic seed from password for consistent obfuscation
+            import hashlib
+
+            seed = int.from_bytes(
+                hashlib.sha256(options.password.encode()).digest()[:8], "big"
+            )
+
+        self.gen = NameGenerator(length=options.length, style=options.style, seed=seed)
         self.stats_data = {}
 
     def execute(self) -> None:
@@ -90,7 +106,9 @@ class ObfuscationService:
         if options.language == Language.PYTHON:
             obfuscator = PythonObfuscator(self.mm, self.gen, options.input_file.name)
             key_path = str(options.key_file) if options.key_file else None
-            result = obfuscator.obfuscate(content, key_path)  # type: ignore
+            result = obfuscator.obfuscate(
+                content, key_path, encryption_key=options.password
+            )
         else:
             obfuscator = CObfuscator(self.mm, self.gen, options.input_file.name)
             result = obfuscator.obfuscate(content)
@@ -128,7 +146,9 @@ class ObfuscationService:
                     self.mm, self.gen, options.input_file.name
                 )
                 key_path = str(options.key_file) if options.key_file else None
-                result = obfuscator.restore(key_path, content)  # type: ignore
+                result = obfuscator.restore(
+                    key_path, content, encryption_key=options.password
+                )
             else:
                 obfuscator = CObfuscator(self.mm, self.gen, options.input_file.name)
                 result = obfuscator.restore(content)
@@ -146,25 +166,23 @@ class ObfuscationService:
     def _read_file(self, path: Path) -> str:
         try:
             return path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            raise FileNotFoundError(
+        except OSError:  # Catch file not found and other OS errors
+            raise FileNotFound(
                 f"❌ Error: Input file not found: {path}\n"
                 f"💡 Hint: Check if the file path is correct or use an absolute path"
             )
         except PermissionError:
-            raise FileNotFoundError(
+            raise FileNotFound(
                 f"❌ Error: Permission denied: {path}\n"
                 f"💡 Hint: Check file permissions or try running with appropriate rights"
             )
         except UnicodeDecodeError:
-            raise FileNotFoundError(
+            raise FileNotFound(
                 f"❌ Error: File encoding issue: {path}\n"
                 f"💡 Hint: Ensure the file is a valid text file with UTF-8 encoding"
             )
         except Exception as e:
-            raise FileNotFoundError(
-                f"❌ Error: Failed to read {path}\n" f"💡 Details: {e}"
-            )
+            raise FileNotFound(f"❌ Error: Failed to read {path}\n" f"💡 Details: {e}")
 
     def _write_file(self, path: Path, content: str) -> None:
         try:
@@ -189,7 +207,7 @@ class ObfuscationService:
     def _load_mapping(self, key_file: Path) -> None:
         try:
             self.mm.load_mapping(key_file)
-        except FileNotFoundError:
+        except OSError:  # Catch file not found and other OS errors
             raise ObfuscationError(
                 f"❌ Error: Key file not found: {key_file}\n"
                 f"💡 Hint: Ensure the key file exists or try restoration without --key (using embedded metadata)"
@@ -339,7 +357,10 @@ class ArgumentParser:
         )
         obf.add_argument("input_file", help="Path to input source file")
         obf.add_argument("--out", "-o", help="Path to output file")
-        obf.add_argument("--key", "-k", help="Path to key file")
+        obf.add_argument("--key", "-k", help="Path to key file (JSON map)")
+        obf.add_argument(
+            "--password", "-p", "--pwd", help="Password for encryption/decryption"
+        )
         obf.add_argument("--seed", "-s", type=int, help="Random seed")
         obf.add_argument(
             "--style",
@@ -368,7 +389,10 @@ class ArgumentParser:
         )
         res.add_argument("input_file", help="Path to obfuscated file")
         res.add_argument("--out", "-o", help="Path to output file")
-        res.add_argument("--key", "-k", help="Path to key file")
+        res.add_argument("--key", "-k", help="Path to key file (JSON map)")
+        res.add_argument(
+            "--password", "-p", "--pwd", help="Password for encryption/decryption"
+        )
         res.add_argument(
             "--stats",
             action="store_true",
@@ -400,6 +424,11 @@ class ArgumentParser:
                 raw.seed
                 if hasattr(raw, "seed") and raw.seed is not None
                 else config.get("seed", None)
+            ),
+            password=(
+                raw.password
+                if hasattr(raw, "password")
+                else config.get("password", None)
             ),
             style=(
                 raw.style
@@ -494,7 +523,7 @@ def run() -> None:
 
     try:
         service.execute()
-    except FileNotFoundError as e:
+    except FileNotFound as e:
         print(f"{e}")
         sys.exit(1)
     except ObfuscationError as e:

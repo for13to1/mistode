@@ -69,6 +69,8 @@ Thumbs.db
 # Mistode specific
 *.obf.py
 *.res.py
+*.obf.c
+*.res.c
 *.map.json
 *.key
 

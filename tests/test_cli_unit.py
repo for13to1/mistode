@@ -28,7 +28,7 @@ from mistode.cli import (
     ArgumentParser,
     CLIError,
     Command,
-    FileNotFoundError,
+    FileNotFound,
     Language,
     ObfuscationError,
     ObfuscationService,
@@ -132,7 +132,7 @@ class TestObfuscationService:
             key_file=Path("test.map.json"),
         )
         service = ObfuscationService(options)
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFound):
             service._read_file(Path("nonexistent.py"))
 
     def test_write_file_success(self):
@@ -454,7 +454,7 @@ class TestCLIError:
         """
         Test file not found error
         """
-        error = FileNotFoundError("File not found")
+        error = FileNotFound("File not found")
         assert isinstance(error, CLIError)
 
     def test_obfuscation_error(self):

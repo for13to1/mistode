@@ -453,7 +453,7 @@ def test_c_obfuscator_heuristic_scanner():
     obfuscator = c.CObfuscator(mm, gen)
 
     # Force use of scanner directly to test the logic
-    externals = obfuscator._scan_for_undefined_symbols(code)
+    externals = obfuscator._scan_for_external_symbols(code)
 
     # 'printf' is used and not defined -> External
     assert "printf" in externals

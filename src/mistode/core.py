@@ -21,14 +21,12 @@ import random
 class NameGenerator:
     def __init__(self, length: int = 16, style: str = "similar", seed=None):
         """
-        Encrypted token generator
+        Obfuscated token name generator.
 
         Args:
-            length: token length, range [8,32]
-            length: token length, range [8,32]
-            style: naming style - "similar" (visually similar characters),
-                   "random" (purely random)
-            seed: random seed
+            length: Token length (8-32 characters).
+            style: Naming style - "similar" (visually similar chars) or "random".
+            seed: Random seed for reproducible generation.
         """
         if length < 8 or length > 32:
             raise ValueError(f"Length must be between 8 and 32, current: {length}")
@@ -63,7 +61,7 @@ class NameGenerator:
 
     def generate(self) -> str:
         """
-        Generate unique encrypted token
+        Generate unique obfuscated identifier
         """
         max_attempts = 100
         for attempt in range(max_attempts):
@@ -93,7 +91,7 @@ class NameGenerator:
 
     def _generate_similar(self) -> str:
         """
-        Generate similar character style token
+        Generate similar character style identifier with random first character
         """
         first_char = self.rng.choice(self.random_letters)
 
@@ -199,10 +197,16 @@ class MappingManager:
     def register_file(self, original, obfuscated):
         self.file_mapping[obfuscated] = original
 
-    def load_mapping(self, filepath):
-        with open(filepath, "r") as f:
+    def load_mapping(self, filepath: str) -> None:
+        """
+        Load mapping data from JSON file.
+
+        Args:
+            filepath: Path to the mapping JSON file.
+        """
+        with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
-            self.mapping = data.get("twd", {})  # forward
+            self.mapping = data.get("identifier_mapping", {})
             self.reverse_mapping = {v: k for k, v in self.mapping.items()}
             self.comments = data.get("comments", {})
             self.file_mapping = data.get("files", {})
@@ -213,7 +217,7 @@ class MappingManager:
         with open(filepath, "w") as f:
             json.dump(
                 {
-                    "twd": self.mapping,
+                    "identifier_mapping": self.mapping,
                     "comments": self.comments,
                     "files": self.file_mapping,
                     "encryption_key": self.encryption_key,

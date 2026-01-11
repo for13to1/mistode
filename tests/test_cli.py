@@ -626,7 +626,7 @@ int calculate_sum(int a, int b);
 
         with open(key_file, "w") as f:
             f.write(
-                '{"twd": {}, "comments": {}, "files": {}, '
+                '{"identifier_mapping": {}, "comments": {}, "files": {}, '
                 '"encryption_key": null, "string_quote_types": {}}'
             )
 

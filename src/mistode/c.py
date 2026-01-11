@@ -132,11 +132,11 @@ class CObfuscator:
         """Yields regex matches for tokens in the C source code."""
         return self.TOKEN_PATTERN.finditer(text)
 
-    def _scan_for_undefined_symbols(self, source_code: str) -> Set[str]:
+    def _scan_for_external_symbols(self, source_code: str) -> Set[str]:
         """
-        Heuristic scanner to identify symbols that are used but NOT
-        defined in the file. Acts as a fallback when compiler tools are
-        unavailable, or as a primary analysis for simple cases.
+        Heuristic scanner to identify external symbols (used but not defined in file).
+        Acts as a fallback when compiler tools are unavailable, or as a primary
+        analysis for simple cases.
         """
         defined_symbols = set()
         all_identifiers = set()
@@ -304,7 +304,7 @@ class CObfuscator:
                         pass
 
         # Method 2: Heuristic Fallback
-        return self._scan_for_undefined_symbols(source_code)
+        return self._scan_for_external_symbols(source_code)
 
     def _inject_source_as_comments(self, source_code: str, obfuscated_code: str) -> str:
         """
@@ -434,7 +434,7 @@ class CObfuscator:
         # 3. Embed Metadata (Keys) - Kept for legacy compatibility
         # or if lossless restoration fails
         mapping_info = {
-            "twd": self.mm.mapping,
+            "identifier_mapping": self.mm.mapping,
             "comments": self.mm.comments,
             "files": self.mm.file_mapping,
             "encryption_key": self.mm.encryption_key,
@@ -481,7 +481,7 @@ class CObfuscator:
 
                 # Load metadata if not already loaded (or merge)
                 if not self.mm.mapping:
-                    self.mm.mapping = data.get("twd", {})
+                    self.mm.mapping = data.get("identifier_mapping", {})
                     self.mm.reverse_mapping = {v: k for k, v in self.mm.mapping.items()}
                     self.mm.comments = data.get("comments", {})
                     self.mm.file_mapping = data.get("files", {})
