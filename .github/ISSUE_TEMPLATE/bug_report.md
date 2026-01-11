@@ -25,8 +25,8 @@ If applicable, add screenshots to help explain your problem.
 
 **Environment:**
  - OS: [e.g. Windows, macOS, Linux]
- - Python Version: [e.g. 3.8, 3.9, 3.10]
- - Mistode Version: [e.g. 0.1.0]
+ - Python Version: [e.g. 3.14]
+ - Mistode Version: [e.g. 0.1.1]
 
 **Additional context**
 Add any other context about the problem here.

@@ -323,14 +323,7 @@ class ArgumentParser:
             if config_file.exists():
                 try:
                     import tomllib
-                except ImportError:
-                    try:
-                        import tomli as tomllib
-                    except ImportError:
-                        # No TOML library available, skip config loading
-                        return config
 
-                try:
                     with open(config_file, "rb") as f:
                         data = tomllib.load(f)
                         # Look for [tool.mistode] section
