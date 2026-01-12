@@ -59,35 +59,67 @@ class NameGenerator:
         )
         self.random_letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
+        # Define homograph confusables to avoid
+        self.homograph_confusables = {
+            "a": ["а", "а"],  # Latin 'a' vs Cyrillic 'а'
+            "b": ["Ь", "ь"],  # Latin 'b' vs Cyrillic 'ь'
+            "c": ["с", "с"],  # Latin 'c' vs Cyrillic 'с'
+            "e": ["е", "е"],  # Latin 'e' vs Cyrillic 'е'
+            "h": ["н", "н"],  # Latin 'h' vs Cyrillic 'н'
+            "i": ["і", "і"],  # Latin 'i' vs Ukrainian 'і'
+            "k": ["к", "к"],  # Latin 'k' vs Cyrillic 'к'
+            "m": ["м", "м"],  # Latin 'm' vs Cyrillic 'м'
+            "o": ["о", "о"],  # Latin 'o' vs Cyrillic 'о'
+            "p": ["р", "р"],  # Latin 'p' vs Cyrillic 'р'
+            "s": ["ѕ", "ѕ"],  # Latin 's' vs Cyrillic 'ѕ'
+            "x": ["х", "х"],  # Latin 'x' vs Cyrillic 'х'
+            "y": ["у", "у"],  # Latin 'y' vs Cyrillic 'у'
+            "0": ["о", "о"],  # Digit '0' vs Cyrillic 'о'
+            "1": ["і", "і"],  # Digit '1' vs Ukrainian 'і'
+        }
+
     def generate(self) -> str:
         """
         Generate unique obfuscated identifier
         """
-        max_attempts = 100
+        max_attempts = 1000  # Increased attempts to handle more complex cases
         for attempt in range(max_attempts):
             token = self._generate_single()
 
-            # Check for duplicates
-            if token not in self.generated_tokens:
+            # Check for duplicates and homograph issues
+            if (
+                token not in self.generated_tokens
+                and self._validate_token_for_homographs(token)
+            ):
                 self.generated_tokens.add(token)
                 self.counter += 1
                 return token
 
             self.collision_count += 1
 
+        # If we still can't generate unique tokens, try increasing length
+        if self.length < 32:
+            old_length = self.length
+            self.length = min(
+                self.length + 4, 32
+            )  # Increase length to reduce collisions
+            try:
+                token = self._generate_single()
+                if (
+                    token not in self.generated_tokens
+                    and self._validate_token_for_homographs(token)
+                ):
+                    self.generated_tokens.add(token)
+                    self.counter += 1
+                    return token
+            finally:
+                self.length = old_length  # Restore original length after trying
+
         raise RuntimeError(
             f"Unable to generate unique token, collision persists after "
-            f"{max_attempts} attempts"
+            f"{max_attempts} attempts with length {self.length}. "
+            f"Consider using a different style or increasing token length."
         )
-
-    def _generate_single(self) -> str:
-        """
-        Generate single token (no duplicate check)
-        """
-        if self.style == "similar":
-            return self._generate_similar()
-        else:
-            return self._generate_random()
 
     def _generate_similar(self) -> str:
         """
@@ -102,6 +134,21 @@ class NameGenerator:
 
         return first_char + "".join(remaining_chars)
 
+    def _validate_token_for_homographs(self, token: str) -> bool:
+        """
+        Check if token contains potentially confusing homograph characters
+        """
+        # Convert to lowercase for comparison
+        lower_token = token.lower()
+
+        for char in lower_token:
+            if char in self.homograph_confusables:
+                # Check if any confusable character exists in the token
+                for confusable in self.homograph_confusables[char]:
+                    if confusable in token:
+                        return False
+        return True
+
     def _generate_random(self) -> str:
         """
         Generate pure random style token
@@ -114,12 +161,35 @@ class NameGenerator:
 
         return first_char + "".join(remaining_chars)
 
+    def _generate_single(self) -> str:
+        """
+        Generate single token (no duplicate check)
+        """
+        if self.style == "similar":
+            token = self._generate_similar()
+        else:
+            token = self._generate_random()
+
+        # Ensure the token doesn't contain homograph confusables
+        while not self._validate_token_for_homographs(token):
+            # If the token contains homograph confusables, regenerate
+            if self.style == "similar":
+                token = self._generate_similar()
+            else:
+                token = self._generate_random()
+
+        return token
+
     def set_length(self, length: int):
         """
         Set token length
         """
+        if not isinstance(length, int):
+            raise TypeError("Length must be an integer")
         if length < 8 or length > 32:
             raise ValueError(f"Length must be between 8 and 32, current: {length}")
+        if length < 1 or length > 255:  # Additional check for extreme values
+            raise ValueError(f"Length must be between 1 and 255, current: {length}")
         self.length = length
 
     def set_style(self, style: str):
@@ -243,6 +313,11 @@ class StringEncryptor:
             # Generate random key between 1-255
             self.key = random.randint(1, 255)
         else:
+            # Validate the key is an integer between 1 and 255
+            if not isinstance(key, int):
+                raise TypeError("Key must be an integer")
+            if key < 1 or key > 255:
+                raise ValueError("Key must be between 1 and 255")
             self.key = key
 
     def encrypt(self, text):

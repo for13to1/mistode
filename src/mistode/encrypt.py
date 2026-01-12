@@ -21,6 +21,14 @@ class EncryptionManager:
         """
         if not key:
             raise ValueError("Key cannot be empty")
+        if not isinstance(key, str):
+            raise TypeError("Key must be a string")
+        if (
+            len(key) > 1024
+        ):  # Prevent extremely long keys that could cause memory issues
+            raise ValueError(
+                "Key length exceeds maximum allowed length of 1024 characters"
+            )
         # SHA-256 to get a fixed-length key from arbitrary string
         self.key_hash = hashlib.sha256(key.encode("utf-8")).digest()
 
