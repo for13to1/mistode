@@ -29,9 +29,9 @@ Mistode (Mist Code, pronounced like "Miss Told") is a lightweight code obfuscati
   - **Lossless Restoration**: Achieves lossless consistency with the original file (preserving all comments and formatting) via distributed annotated injection of source chunks.
 - **C Support**:
   - **Fast Tokenization**: Uses robust regular expression tokenizers.
-  - **Comment Obfuscation**: Obfuscates `//` and `/* */` comment content.
-  - **Compilation Safety**: Preserves keywords, preprocessor directives, and string literals (ensuring safety).
-  - **Lossless Restoration**: Achieves lossless consistency with the original file via distributed annotated injection of source chunks.
+  - **Layout Engine**: Uses `// @mistode:chunk:` metadata to preserve code structure.
+  - **Compilation Safety**: Preserves keywords, preprocessor directives, and external symbols.
+  - **Lossless Restoration**: Achieves lossless consistency with the original file via distributed layout chunks.
 
 ## Installation
 
