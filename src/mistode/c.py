@@ -163,6 +163,11 @@ class CObfuscator:
 
         n = len(sig_tokens)
 
+        # Collect user-defined type names so that declarations using them
+        # (e.g. `Point q;` or `my_int count;`) count as definitions instead
+        # of being mistaken for external symbols.
+        user_types = self._collect_user_types(sig_tokens)
+
         for idx, m in enumerate(sig_tokens):
             name = m.group(3)
             if not name:
@@ -189,12 +194,10 @@ class CObfuscator:
                 prev_token_match = sig_tokens[prev_idx]
                 prev_ident = prev_token_match.group(3)
 
-                # If the previous token is a known C type keyword, this is
-                # likely a definition.
-                # Note: This misses user-defined types (struct aliases),
-                # but is safe enough for a heuristic (false negatives just
-                # mean less obfuscation).
-                if prev_ident in self.TYPE_KEYWORDS:
+                # If the previous token is a known C type keyword or a
+                # user-defined type (struct/union/enum/typedef alias), this
+                # is likely a definition.
+                if prev_ident in self.TYPE_KEYWORDS or prev_ident in user_types:
                     is_type_def = True
 
             if is_type_def:
@@ -214,6 +217,38 @@ class CObfuscator:
 
         # External symbols = All Used - All Defined - Reserved
         return all_ids - defined - self.reserved_identifiers
+
+    def _collect_user_types(self, sig_tokens: List[Match[str]]) -> Set[str]:
+        """
+        Collect user-defined type names declared in this file:
+
+        - `struct Foo`, `union Bar`, `enum Baz` -> Foo/Bar/Baz
+        - `typedef ... Name;` -> Name (the last identifier before `;`)
+
+        These are treated like type keywords so declarations such as
+        `Foo x;` count as definitions during symbol discovery.
+        """
+        user_types = set()
+        n = len(sig_tokens)
+
+        for i, m in enumerate(sig_tokens):
+            txt = m.group(0)
+
+            if txt in ("struct", "union", "enum"):
+                if i + 1 < n and sig_tokens[i + 1].group(3):
+                    user_types.add(sig_tokens[i + 1].group(3))
+            elif txt == "typedef":
+                alias = None
+                for k in range(i + 1, n):
+                    t = sig_tokens[k].group(0)
+                    if t == ";":
+                        break
+                    if sig_tokens[k].group(3):
+                        alias = sig_tokens[k].group(3)
+                if alias:
+                    user_types.add(alias)
+
+        return user_types
 
     def _has_function_body(self, tokens: List[Match[str]], start_idx: int) -> bool:
         """

@@ -627,3 +627,38 @@ def test_c_obfuscator_missing_mapping_raises():
 
     with pytest.raises(ValueError):
         c.CObfuscator(MappingManager(), NameGenerator()).restore(obfuscated)
+
+
+def test_c_obfuscator_typedef_and_user_types():
+    """
+    Declarations using user-defined types (struct/typedef aliases) must be
+    recognized as definitions so their variables get obfuscated consistently.
+    """
+    code = """
+typedef struct Point Point;
+typedef int my_int;
+typedef char *string_t;
+
+int main() {
+    struct Point p;
+    Point q;
+    my_int count = 3;
+    string_t msg = "hi";
+    return 0;
+}
+"""
+
+    from src.mistode import c
+    from src.mistode.core import MappingManager, NameGenerator
+
+    mm = MappingManager()
+    gen = NameGenerator()
+    obfuscator = c.CObfuscator(mm, gen)
+
+    # Exercise the heuristic scanner directly (gcc/nm would bypass it)
+    externals = obfuscator._simple_scanner(code)
+
+    # p/q/count/msg are declared with user-defined types, so they must be
+    # classified as defined (internal) symbols, not external ones.
+    for name in ("p", "q", "count", "msg"):
+        assert name not in externals
