@@ -25,7 +25,7 @@ import keyword
 import tokenize
 import zlib
 from io import StringIO
-from typing import Dict, Optional, Set, Tuple, cast
+from typing import cast
 
 from .core import MappingManager, NameGenerator
 from .encrypt import EncryptionManager
@@ -39,9 +39,9 @@ class ImportAnalyzer:
     """
 
     def __init__(self) -> None:
-        self.module_aliases: Dict[str, str] = {}
-        self.imported_names: Set[str] = set()
-        self.module_attrs: Dict[str, Set[str]] = {}
+        self.module_aliases: dict[str, str] = {}
+        self.imported_names: set[str] = set()
+        self.module_attrs: dict[str, set[str]] = {}
 
     def analyze(self, tree: ast.AST) -> None:
         for node in ast.walk(tree):
@@ -62,7 +62,7 @@ class ImportAnalyzer:
     def is_imported_module(self, name: str) -> bool:
         return name in self.module_aliases
 
-    def get_module_name(self, alias: str) -> Optional[str]:
+    def get_module_name(self, alias: str) -> str | None:
         return self.module_aliases.get(alias)
 
     def is_imported_name(self, name: str) -> bool:
@@ -90,16 +90,16 @@ class PythonObfuscator:
         self.gen = generator
         self.filename = filename
 
-        self.ignore_set: Set[str] = set(keyword.kwlist)
+        self.ignore_set: set[str] = set(keyword.kwlist)
         self.ignore_set.update(dir(builtins))
         self.ignore_set.add("self")
         self.ignore_set.add("cls")
 
         self.import_analyzer = ImportAnalyzer()
-        self._cached_tree: Optional[ast.AST] = None
-        self.preserved_keywords: Set[str] = set()
+        self._cached_tree: ast.AST | None = None
+        self.preserved_keywords: set[str] = set()
 
-        self.mapping_records: Dict[str, str | Dict[str, str]] = {
+        self.mapping_records: dict[str, str | dict[str, str]] = {
             "identifier_mapping": {},
             "docstring_mapping": {},
             "string_prefixes": {},
@@ -111,9 +111,9 @@ class PythonObfuscator:
     def obfuscate(
         self,
         source_code: str,
-        mapping_file: Optional[str] = None,
+        mapping_file: str | None = None,
         embed_metadata: bool = True,
-        encryption_key: Optional[str] = None,
+        encryption_key: str | None = None,
     ) -> str:
         # Initialize encryption manager if key is provided
         encryption_manager = (
@@ -163,12 +163,12 @@ class PythonObfuscator:
 
     def _collect_replacements(  # noqa: C901
         self, tree: ast.AST, source_code: str
-    ) -> Dict[Tuple[int, int], str]:
+    ) -> dict[tuple[int, int], str]:
         """
         Traverse the AST to collect identifier replacements (line, col) -> new_name.
         Uses token stream analysis to pinpoint exact locations of definitions.
         """
-        replacements: Dict[Tuple[int, int], str] = {}
+        replacements: dict[tuple[int, int], str] = {}
 
         # Pre-tokenize source for precise location finding
         try:
@@ -203,7 +203,7 @@ class PythonObfuscator:
                 name: str,
                 is_class: bool = False,
                 is_async: bool = False,
-            ) -> Optional[Tuple[int, int]]:
+            ) -> tuple[int, int] | None:
                 """
                 Scan tokens starting from node_lineno to find the definition name.
                 Skips decorators, looks for 'def'/'class' keyword then the name.
@@ -355,8 +355,8 @@ class PythonObfuscator:
         return replacements
 
     def _generate_obfuscated_name(self, original: str) -> str:
-        identifier_map: Dict[str, str] = cast(
-            Dict[str, str], self.mapping_records["identifier_mapping"]
+        identifier_map: dict[str, str] = cast(
+            dict[str, str], self.mapping_records["identifier_mapping"]
         )
 
         if original in identifier_map:
@@ -374,7 +374,7 @@ class PythonObfuscator:
         doc_hash = hashlib.sha256(original_doc.encode()).hexdigest()[:12]
         return f"Obfuscated Docstring: {doc_hash}"
 
-    def _get_mapping_info(self) -> Dict:
+    def _get_mapping_info(self) -> dict:
         """
         Get complete mapping information
         """
@@ -387,7 +387,7 @@ class PythonObfuscator:
         }
 
     def _generate_metadata_comment(
-        self, encryption_manager: Optional[EncryptionManager] = None
+        self, encryption_manager: EncryptionManager | None = None
     ) -> str:
         mapping_info = self._get_mapping_info()
         json_str = json.dumps(mapping_info, ensure_ascii=False)
@@ -401,8 +401,8 @@ class PythonObfuscator:
             return f"#@mistode:metadata:{encoded}"
 
     def _extract_metadata_from_code(
-        self, code: str, encryption_manager: Optional[EncryptionManager] = None
-    ) -> Optional[Dict]:
+        self, code: str, encryption_manager: EncryptionManager | None = None
+    ) -> dict | None:
         for line in code.splitlines():
             if encryption_manager and line.startswith("#@mistode:secure_metadata:"):
                 try:
@@ -430,8 +430,8 @@ class PythonObfuscator:
     def restore(  # noqa: C901
         self,
         mapping_file: str,
-        obfuscated_code: Optional[str] = None,
-        encryption_key: Optional[str] = None,
+        obfuscated_code: str | None = None,
+        encryption_key: str | None = None,
     ) -> str:
         mapping_info = {}
         encryption_manager = (

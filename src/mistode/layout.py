@@ -3,7 +3,7 @@ import json
 import tokenize
 import zlib
 from io import StringIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
 class LayoutEngine:
@@ -16,8 +16,8 @@ class LayoutEngine:
     def obfuscate_token_stream(  # noqa: C901
         self,
         source_code: str,
-        replacements: Dict[Tuple[int, int], str],
-        encryption_manager: Optional[Any] = None,
+        replacements: dict[tuple[int, int], str],
+        encryption_manager: Any | None = None,
     ) -> str:
         """
         Obfuscates the source code by filtering the token stream.
@@ -41,7 +41,7 @@ class LayoutEngine:
         # accumulated layout entries, compress/encrypt them, allow the code
         # line to follow.
 
-        kept_tokens: List[Tuple[int, str, Dict[str, Any]]] = []
+        kept_tokens: list[tuple[int, str, dict[str, Any]]] = []
         # list of (token_type, token_string, layout_metadata_for_this_token)
 
         # Buffer for 'skipped' content (whitespace, comments) that precedes
@@ -164,15 +164,15 @@ class LayoutEngine:
         # 3. Reconstruct Obfuscated Code with Interleaved Comments
         output_lines = []
 
-        current_line_tokens: List[str] = []
-        current_line_layouts: List[Dict[str, Any]] = []
+        current_line_tokens: list[str] = []
+        current_line_layouts: list[dict[str, Any]] = []
 
         indents = [""]
         at_line_start = True
 
         fstring_depth = 0
-        FSTRING_START = getattr(tokenize, "FSTRING_START", -1)
-        FSTRING_END = getattr(tokenize, "FSTRING_END", -1)
+        FSTRING_START = tokenize.FSTRING_START
+        FSTRING_END = tokenize.FSTRING_END
 
         for idx, (ttype, tstring, layout_meta) in enumerate(kept_tokens):
             if ttype == tokenize.ENDMARKER:
@@ -305,10 +305,10 @@ class LayoutEngine:
 
     def _flush_line(
         self,
-        output_lines: List[str],
-        tokens: List[str],
-        layouts: List[Dict],
-        encryption_manager: Optional[Any],
+        output_lines: list[str],
+        tokens: list[str],
+        layouts: list[dict],
+        encryption_manager: Any | None,
     ):
         """Generates the layout comment and the code line."""
         if not tokens and not layouts:
@@ -334,8 +334,8 @@ class LayoutEngine:
     def restore_token_stream(  # noqa: C901
         self,
         obfuscated_code: str,
-        reverse_mapping: Dict[str, str],
-        encryption_manager: Optional[Any] = None,
+        reverse_mapping: dict[str, str],
+        encryption_manager: Any | None = None,
     ) -> str:
         """
         Restores original code from obfuscated code with interleaved comments.

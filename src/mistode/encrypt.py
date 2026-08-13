@@ -5,7 +5,6 @@ Provides secure, key-based encryption for source chunks and metadata.
 
 import base64
 import hashlib
-from typing import Union
 
 
 class EncryptionManager:
@@ -56,7 +55,7 @@ class EncryptionManager:
 
         return bytes(output)
 
-    def encrypt(self, data: Union[str, bytes]) -> str:
+    def encrypt(self, data: str | bytes) -> str:
         """
         Encrypt data and return base64 string.
         """

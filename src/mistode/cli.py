@@ -19,7 +19,6 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
 
 from .c import CObfuscator
 from .core import MappingManager, NameGenerator
@@ -62,10 +61,10 @@ class ObfuscationError(CLIError):
 class Options:
     command: Command
     input_file: Path
-    output_file: Optional[Path] = None
-    key_file: Optional[Path] = None
-    password: Optional[str] = None
-    seed: Optional[int] = None
+    output_file: Path | None = None
+    key_file: Path | None = None
+    password: str | None = None
+    seed: int | None = None
     style: str = "similar"
     length: int = 16
     language: Language = Language.PYTHON
@@ -99,7 +98,7 @@ class ObfuscationService:
         options = self.options
         content = self._read_file(options.input_file)
 
-        obfuscator: Union[PythonObfuscator, CObfuscator]
+        obfuscator: PythonObfuscator | CObfuscator
         if options.language == Language.PYTHON:
             obfuscator = PythonObfuscator(self.mm, self.gen, options.input_file.name)
             key_path = str(options.key_file) if options.key_file else None
@@ -137,7 +136,7 @@ class ObfuscationService:
             self._load_mapping(options.key_file)
 
         try:
-            obfuscator: Union[PythonObfuscator, CObfuscator]
+            obfuscator: PythonObfuscator | CObfuscator
             if options.language == Language.PYTHON:
                 obfuscator = PythonObfuscator(
                     self.mm, self.gen, options.input_file.name
@@ -484,7 +483,7 @@ class ArgumentParser:
 
     def _resolve_key_path(
         self, input_path: Path, key: str, cmd: Command, language: Language
-    ) -> Optional[Path]:
+    ) -> Path | None:
 
         if key:
             return Path(key)

@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import tempfile
 import zlib
-from typing import Dict, Iterator, List, Match, Set
+from collections.abc import Iterator
 
 from .core import MappingManager, NameGenerator
 
@@ -133,18 +133,18 @@ class CObfuscator:
         self.reserved_identifiers = self.KEYWORDS.copy()
         self.reserved_identifiers.add("main")
 
-    def _tokenize(self, text: str) -> Iterator[Match[str]]:
+    def _tokenize(self, text: str) -> Iterator[re.Match[str]]:
         """Yields regex matches for tokens in the C source code."""
         return self.TOKEN_PATTERN.finditer(text)
 
-    def _scan_for_external_symbols(self, source_code: str) -> Set[str]:
+    def _scan_for_external_symbols(self, source_code: str) -> set[str]:
         """
         Heuristic scanner to identify external symbols (used but not defined
         in file). Acts as a fallback when compiler tools are unavailable.
         """
         return self._simple_scanner(source_code)
 
-    def _simple_scanner(self, source_code: str) -> Set[str]:  # noqa: C901
+    def _simple_scanner(self, source_code: str) -> set[str]:  # noqa: C901
         """
         A minimalist external symbol scanner used as a fallback.
 
@@ -218,7 +218,7 @@ class CObfuscator:
         # External symbols = All Used - All Defined - Reserved
         return all_ids - defined - self.reserved_identifiers
 
-    def _collect_user_types(self, sig_tokens: List[Match[str]]) -> Set[str]:
+    def _collect_user_types(self, sig_tokens: list[re.Match[str]]) -> set[str]:
         """
         Collect user-defined type names declared in this file:
 
@@ -250,7 +250,7 @@ class CObfuscator:
 
         return user_types
 
-    def _has_function_body(self, tokens: List[Match[str]], start_idx: int) -> bool:
+    def _has_function_body(self, tokens: list[re.Match[str]], start_idx: int) -> bool:
         """
         Scans ahead from an opening parenthesis `(` to check if the function
         has a body `{ ... }` or is just a declaration `;`.
@@ -276,7 +276,7 @@ class CObfuscator:
                     return False  # Likely a declaration
         return False
 
-    def _identify_external_symbols(self, source_code: str) -> Set[str]:  # noqa: C901
+    def _identify_external_symbols(self, source_code: str) -> set[str]:  # noqa: C901
         """
         Identifies external symbols. Uses gcc/nm if available, else heuristic.
         (Retained logic from previous version)
@@ -478,7 +478,7 @@ class CObfuscator:
 
         return result
 
-    def _flush_line(self, output: List[str], tokens: List[str], layouts: List[Dict]):
+    def _flush_line(self, output: list[str], tokens: list[str], layouts: list[dict]):
         # Encode layout
         json_bytes = json.dumps(layouts).encode("utf-8")
         compressed = zlib.compress(json_bytes)
