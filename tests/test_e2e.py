@@ -289,6 +289,61 @@ class TestProjectMode:
         assert run.returncode == 0, run.stderr
         assert run.stdout.strip() == "1"
 
+    @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
+    def test_c_project_gbk_shared_symbol(self, tmp_path: Path):
+        """C project with GBK-encoded files and a shared header symbol
+        must obfuscate, compile, run, and restore byte-identically."""
+        proj = tmp_path / "gcproj"
+        proj.mkdir()
+        (proj / "util.h").write_bytes(
+            (
+                "#ifndef UTIL_H\n#define UTIL_H\n"
+                "/* 共享工具函数声明 */\n"
+                "int shared_add(int a, int b);\n#endif\n"
+            ).encode("gbk")
+        )
+        (proj / "util.c").write_bytes(
+            (
+                '#include "util.h"\n/* 实现 */\n'
+                "int shared_add(int a, int b) {\n    return a + b;\n}\n"
+            ).encode("gbk")
+        )
+        (proj / "main.c").write_bytes(
+            (
+                '#include <stdio.h>\n#include "util.h"\n'
+                'int main() {\n    printf("%d\\n", shared_add(2, 3));\n'
+                "    return 0;\n}\n"
+            ).encode("gbk")
+        )
+
+        obf_dir = proj.with_name("gcproj.obf")
+        result = run_cli("o", str(proj))
+        assert result.returncode == 0, result.stderr
+
+        compile_result = subprocess.run(
+            [
+                "gcc",
+                "-I",
+                str(obf_dir),
+                str(obf_dir / "main.c"),
+                str(obf_dir / "util.c"),
+                "-o",
+                str(tmp_path / "app"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert compile_result.returncode == 0, compile_result.stderr
+        run = subprocess.run([str(tmp_path / "app")], capture_output=True, text=True)
+        assert run.stdout.strip() == "5"
+
+        res_dir = proj.with_name("gcproj.res")
+        result = run_cli("r", str(obf_dir))
+        assert result.returncode == 0, result.stderr
+
+        for rel in ("util.h", "util.c", "main.c"):
+            assert (res_dir / rel).read_bytes() == (proj / rel).read_bytes()
+
 
 class TestEncryption:
     """--password encryption round-trip via the real CLI."""
