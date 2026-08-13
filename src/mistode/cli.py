@@ -186,33 +186,40 @@ class ObfuscationService:
 
     SUPPORTED_EXTS = {".py", ".c", ".h", ".cpp"}
     SKIP_DIRS = {
-        ".git",
-        ".hg",
-        ".svn",
-        ".venv",
+        # Build/artifact output directories (common across Python and C)
+        "build",
+        "dist",
+        "bin",
+        "obj",
+        "out",
+        "target",
+        "CMakeFiles",
+        "Debug",
+        "Release",
+        # Non-hidden virtualenv/package dirs
+        "node_modules",
         "venv",
         "env",
         "__pycache__",
-        "node_modules",
-        "dist",
-        "build",
-        ".tox",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
     }
+
+    def _in_skipped_dir(self, path: Path, root: Path) -> bool:
+        """True if any path component is hidden (dot-prefixed, covering
+        .git/.venv/.idea/... ) or is a known build/artifact directory."""
+        return any(
+            part.startswith(".") or part in self.SKIP_DIRS
+            for part in path.relative_to(root).parts
+        )
 
     def _collect_source_files(self, directory: Path) -> list[Path]:
         """Recursively collect supported source files under a directory,
-        skipping version-control, virtualenv, and cache directories."""
+        skipping hidden, virtualenv, and build/artifact directories."""
         return sorted(
             p
             for p in directory.rglob("*")
             if p.is_file()
             and p.suffix.lower() in self.SUPPORTED_EXTS
-            and not any(
-                part in self.SKIP_DIRS for part in p.relative_to(directory).parts
-            )
+            and not self._in_skipped_dir(p, directory)
         )
 
     def _language_for_file(self, path: Path) -> Language:

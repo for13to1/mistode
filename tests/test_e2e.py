@@ -246,18 +246,27 @@ class TestProjectMode:
         proj = tmp_path / "proj"
         (proj / "__pycache__").mkdir(parents=True)
         (proj / ".venv" / "lib").mkdir(parents=True)
+        (proj / "build" / "CMakeFiles").mkdir(parents=True)
+        (proj / "bin").mkdir()
         (proj / "__pycache__" / "cached.py").write_text("x = 1\n")
         (proj / ".venv" / "lib" / "venvmod.py").write_text("y = 2\n")
+        (proj / "build" / "CMakeFiles" / "generated.c").write_text(
+            "int g() { return 1; }\n"
+        )
+        (proj / "bin" / "stale.c").write_text("int s() { return 2; }\n")
         (proj / "real.py").write_text("z = 3\n")
 
         obf_dir = proj.with_name("proj.obf")
         result = run_cli("o", str(proj))
         assert result.returncode == 0, result.stderr
 
-        # Only the real source file is obfuscated
+        # Only the real source file is obfuscated; cache, venv, and
+        # build/artifact directories are skipped
         assert (obf_dir / "real.py").exists()
         assert not (obf_dir / "__pycache__").exists()
         assert not (obf_dir / ".venv").exists()
+        assert not (obf_dir / "build").exists()
+        assert not (obf_dir / "bin").exists()
 
     def test_project_gbk_file_with_import(self, tmp_path: Path):
         """Cross-file import analysis must use the file's real encoding,
