@@ -14,6 +14,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
+import pytest
+
 from src.mistode import c
 
 
@@ -507,3 +509,89 @@ int    main(  ) {
 
     # Assert lossless identity
     assert restored == code
+
+
+def test_c_obfuscator_numeric_literals_intact():
+    """
+    Regression: numeric literals must survive as single tokens.
+    Previously each digit was split by the single-char fallback branch,
+    corrupting e.g. 3.14159 into '3.1 4 1 5 9'.
+    """
+    code = """
+int main() {
+    double pi = 3.14159265358979323846;
+    int counter = 100;
+    int hex_val = 0xFF;
+    double sci = 1.5e-3;
+    long big = 123456789L;
+    unsigned mask = 0b1010;
+    return 0;
+}
+"""
+
+    from src.mistode import c
+    from src.mistode.core import MappingManager, NameGenerator
+
+    mm = MappingManager()
+    gen = NameGenerator()
+    obfuscator = c.CObfuscator(mm, gen)
+    obfuscated = obfuscator.obfuscate(code)
+
+    assert "3.14159265358979323846" in obfuscated
+    assert "100" in obfuscated
+    assert "0xFF" in obfuscated
+    assert "1.5e-3" in obfuscated
+    assert "123456789L" in obfuscated
+    assert "0b1010" in obfuscated
+
+
+def test_c_obfuscator_cross_instance_restore():
+    """
+    Regression: restoration must work across processes via embedded
+    metadata (fresh MappingManager), not only when the same instance
+    still holds the in-memory mapping.
+    """
+    code = """
+#include <stdio.h>
+
+#define PI 3.14159
+
+int main() {
+    int counter = 100;
+    double area = PI * 2.5;
+    printf("%d %f", counter, area);
+    return 0;
+}
+"""
+
+    from src.mistode import c
+    from src.mistode.core import MappingManager, NameGenerator
+
+    # Obfuscate with a fresh manager (simulates one process/run)
+    obfuscator = c.CObfuscator(MappingManager(), NameGenerator())
+    obfuscated = obfuscator.obfuscate(code)
+
+    # Metadata must be embedded for key-file-free restoration
+    assert "/* @mistode:metadata:" in obfuscated
+
+    # Restore with a *different* fresh manager (simulates a new process/run)
+    restored = c.CObfuscator(MappingManager(), NameGenerator()).restore(obfuscated)
+
+    assert restored == code
+
+
+def test_c_obfuscator_missing_mapping_raises():
+    """
+    Restoration without any mapping (no metadata, no key) must fail
+    loudly instead of silently returning obfuscated names.
+    """
+    from src.mistode import c
+    from src.mistode.core import MappingManager, NameGenerator
+
+    obfuscator = c.CObfuscator(MappingManager(), NameGenerator())
+    obfuscated = obfuscator.obfuscate("int main() { return 0; }")
+    # Strip the embedded metadata to simulate a damaged/lost file footer
+    obfuscated = obfuscated.split("/* @mistode:metadata:")[0]
+
+    with pytest.raises(ValueError):
+        c.CObfuscator(MappingManager(), NameGenerator()).restore(obfuscated)

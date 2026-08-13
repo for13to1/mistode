@@ -125,7 +125,8 @@ class PythonObfuscator:
 
         self.import_analyzer.analyze(tree)
 
-        # Collect all keyword arguments used in calls to prevent obfuscating external APIs
+        # Collect all keyword arguments used in calls to prevent obfuscating
+        # external APIs
         self._collect_preserved_keywords(tree)
 
         # Collect replacements for identifiers based on AST analysis
@@ -160,7 +161,7 @@ class PythonObfuscator:
                     if kw.arg:
                         self.preserved_keywords.add(kw.arg)
 
-    def _collect_replacements(
+    def _collect_replacements(  # noqa: C901
         self, tree: ast.AST, source_code: str
     ) -> Dict[Tuple[int, int], str]:
         """
@@ -196,7 +197,7 @@ class PythonObfuscator:
                 new_name = self.obfuscator._generate_obfuscated_name(name)
                 replacements[(lineno, col_offset)] = new_name
 
-            def _find_def_name_location(
+            def _find_def_name_location(  # noqa: C901
                 self,
                 node_lineno: int,
                 name: str,
@@ -433,7 +434,6 @@ class PythonObfuscator:
             "string_prefixes": self.mapping_records["string_prefixes"],
             "quote_types": self.mapping_records["quote_types"],
             "original_to_unparsed": self.mapping_records["original_to_unparsed"],
-            # "layout_data": self.mapping_records.get("layout_data", ""),  # Interleaved now
         }
 
     def _generate_metadata_comment(
@@ -477,7 +477,7 @@ class PythonObfuscator:
         with open(mapping_file, "w", encoding="utf-8") as f:
             json.dump(mapping_info, f, indent=2, ensure_ascii=False)
 
-    def restore(
+    def restore(  # noqa: C901
         self,
         mapping_file: str,
         obfuscated_code: Optional[str] = None,
@@ -515,41 +515,14 @@ class PythonObfuscator:
 
         identifier_mapping = mapping_info.get("identifier_mapping", {})
         reverse_mapping = {v: k for k, v in identifier_mapping.items()}
-        docstring_mapping = mapping_info.get("docstring_mapping", {})
 
         # Strip metadata comment if present in the restoration input
-        # The LayoutEngine expects clean obfuscated code (or code matching the layout data exactly)
+        # The LayoutEngine expects clean obfuscated code (or code matching
+        # the layout data exactly)
         # However, obfuscate() appended metadata after the code.
         # We need to remove the appended metadata part.
 
         clean_obfuscated_code = obfuscated_code
-        lines = obfuscated_code.splitlines(keepends=True)
-        # Metadata is likely at the end. Scan from end.
-        code_lines = []
-        found_data = False
-        for line in reversed(lines):
-            if line.strip().startswith("#@mistode:"):
-                found_data = True
-                continue  # Skip metadata line
-            if found_data and not line.strip():
-                # Skip the blank lines added before metadata?
-                # obfuscate adds: code + "\n\n" + metadata
-                # So we might see blank lines.
-                continue
-
-            # Once we hit non-metadata/non-blank, we stop skipping?
-            # But what if file naturally ended with blank lines?
-            # LayoutEngine preserved trailing whitespace of original.
-            # If we remove "added" blank lines, we are safe.
-            # But better safe: identifying specifically the block we added.
-            # We added `\n\n#@mistode...`
-            # So stripping ONLY lines that look like metadata or are blank AFTER metadata?
-            # Let's simplify: regex replace the metadata block.
-            found_data = False  # reset
-            code_lines.insert(0, line)
-
-        # Re-assemble only if we actually found/removed something?
-        # Actually, simpler:
         if "#@mistode:" in obfuscated_code:
             # find the index
             idx = obfuscated_code.find("\n\n#@mistode:")

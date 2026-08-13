@@ -1,7 +1,6 @@
 import pytest
 
 from mistode.core import MappingManager, NameGenerator
-from mistode.encrypt import EncryptionManager
 from mistode.python import PythonObfuscator
 
 

@@ -48,15 +48,13 @@ class TestCLI:
         """
         # Create temporary file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write(
-                '''
+            f.write('''
 def test_function():
     """
     Test function
     """
     return "hello"
-'''
-            )
+''')
             original_file = f.name
             restored_file = ""
 
@@ -105,8 +103,7 @@ def test_function():
         """
         # Create temporary file with import statements
         with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write(
-                '''
+            f.write('''
 import re
 import os
 
@@ -115,8 +112,7 @@ def process_text(text):
     Process text
     """
     return re.sub(r"\\s+", " ", text.strip())
-'''
-            )
+''')
             original_file = f.name
 
         try:
@@ -202,16 +198,14 @@ def process_text(text):
         Test C file obfuscation
         """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
-            f.write(
-                """
+            f.write("""
 #include <stdio.h>
 
 int main() {
     printf("Hello World");
     return 0;
 }
-"""
-            )
+""")
             original_file = f.name
 
         try:
@@ -373,8 +367,7 @@ int main() {
         Test C++ file obfuscation
         """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".cpp", delete=False) as f:
-            f.write(
-                """
+            f.write("""
 #include <iostream>
 #include <string>
 
@@ -395,8 +388,7 @@ int main() {
     g.greet();
     return 0;
 }
-"""
-            )
+""")
             original_file = f.name
 
         try:
@@ -430,8 +422,7 @@ int main() {
         Test header file obfuscation
         """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
-            f.write(
-                """
+            f.write("""
 #ifndef HEADER_H
 #define HEADER_H
 
@@ -440,8 +431,7 @@ int main() {
 int calculate_sum(int a, int b);
 
 #endif
-"""
-            )
+""")
             original_file = f.name
 
         try:

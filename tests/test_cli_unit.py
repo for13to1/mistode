@@ -206,6 +206,31 @@ class TestObfuscationService:
             service._print_success("test message")
             mock_print.assert_called_once_with("OK test message")
 
+    def test_collect_stats_python_uses_actual_mapping(self):
+        """
+        Regression: --stats must report the identifiers actually obfuscated.
+        PythonObfuscator tracks its mapping in mapping_records, not in
+        MappingManager.mapping.
+        """
+        from src.mistode.python import PythonObfuscator
+
+        options = Options(
+            command=Command.OBFUSCATE,
+            input_file=Path("test.py"),
+            output_file=Path("test.obf.py"),
+            key_file=Path("test.map.json"),
+        )
+        service = ObfuscationService(options)
+        obfuscator = PythonObfuscator(service.mm, service.gen, "test.py")
+
+        original = "def my_function(x):\n    return x * 2\n"
+        obfuscated = obfuscator.obfuscate(original)
+
+        service._collect_obfuscation_stats(original, obfuscated, obfuscator)
+
+        # my_function and x are both obfuscated
+        assert service.stats_data["total_identifiers"] == 2
+
 
 class TestArgumentParser:
     """

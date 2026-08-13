@@ -25,9 +25,8 @@ Thank you for your interest in the Mistode project! We welcome contributions of 
 
 ## Code Standards
 
-- Use Black to format code: `black src/ tests/`
-- Use isort to sort imports: `isort src/ tests/`
-- Use flake8 to check code quality: `flake8 src/ tests/`
+- Use Ruff to lint code: `ruff check src/ tests/`
+- Use Ruff to format code: `ruff format src/ tests/`
 
 ## Submitting Code
 

@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import tempfile
 import zlib
-from typing import Any, Dict, Iterator, List, Match, Optional, Set, Tuple
+from typing import Dict, Iterator, List, Match, Set
 
 from .core import MappingManager, NameGenerator
 
@@ -102,14 +102,19 @@ class CObfuscator:
     # 1. String Literals
     # 2. Include Directives (to treat as single unit)
     # 3. Identifiers
-    # 4. Comments
-    # 5. Other (separators, operators, whitespace)
-    # Note: Whitespace is explicitly captured in Group 5 so we can distinguish it in the loop
+    # 4. Numeric Literals (decimal, hex, octal, float, with optional suffixes)
+    # 5. Comments
+    # 6. Other (separators, operators, whitespace)
+    # Note: Whitespace is explicitly captured in Group 6 so we can
+    # distinguish it in the loop
     TOKEN_PATTERN = re.compile(
         r'("(?:\\.|[^"\\])*")|'
         r"(#\s*include\s*<[^>]+>)|"
         r"([a-zA-Z_]\w*)|"
-        r"(/\*[^*]*\*+(?:[^/*][^*]*\*+)*/|//[^\n]*)"
+        r"(0[xX][0-9a-fA-F]+[uUlLfF]*|"
+        r"0[bB][01]+[uUlLfF]*|"
+        r"[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?[uUlLfF]*)"
+        r"|(/\*[^*]*\*+(?:[^/*][^*]*\*+)*/|//[^\n]*)"
         r"|(\s+|.)",
         re.DOTALL,
     )
@@ -134,70 +139,12 @@ class CObfuscator:
 
     def _scan_for_external_symbols(self, source_code: str) -> Set[str]:
         """
-        Heuristic scanner to identify external symbols (used but not defined in file).
-        Acts as a fallback when compiler tools are unavailable.
+        Heuristic scanner to identify external symbols (used but not defined
+        in file). Acts as a fallback when compiler tools are unavailable.
         """
-        defined_symbols = set()
-        all_identifiers = set()
-
-        tokens = list(self._tokenize(source_code))
-        n = len(tokens)
-
-        for i, match in enumerate(tokens):
-            identifier = match.group(3)
-            # Only process Identifiers
-            if not identifier:
-                continue
-
-            all_identifiers.add(identifier)
-            if identifier in self.reserved_identifiers:
-                continue
-
-            # Check for Definition Patterns (Simplified)
-
-            # Pattern 1: Function Definition "Identifier (...) {"
-            if i + 1 < n:
-                next_match = tokens[i + 1]
-                # Skip whitespace in lookahead if current logic allows (simplified here)
-                # But tokenize regex yields whitespace. We need to skip it.
-
-                # Manual lookahead skipping whitespace
-                next_relevant = None
-                pck_idx = i + 1
-                while pck_idx < n:
-                    m = tokens[pck_idx]
-                    s = m.group(0)  # Full match
-                    if not s.strip():  # is whitespace
-                        pck_idx += 1
-                        continue
-                    next_relevant = m
-                    break
-
-                if next_relevant and "(" in next_relevant.group(0):
-                    # Found '(', verify closing ')' and '{'
-                    # Simplified balance check would go here (omitted for brevity as per existing logic,
-                    # assuming heuristic is acceptable as per previous design)
-                    is_func_def = False
-
-                    # Basic check for { after )
-                    # ... (Logic from previous verify is complex to reimplement compact,
-                    # reusing the idea: if we see () {, it's a def)
-
-                    # We will trust the previous implementation's heuristic 'idea'
-                    # but implementing robustly requires scanning.
-                    # Since this is a refactor of the *obfuscation mechanism*,
-                    # we keep the symbol discovery lightweight.
-                    pass
-
-        # For this refactor, we retain the robust external symbol logic if available,
-        # but the main focus is Layout Engine.
-        # Re-implementing the exact previous scanner to ensure no regression.
-
-        # Resetting to simple implementation for this function to ensure reliability
-        # based on regex scan.
         return self._simple_scanner(source_code)
 
-    def _simple_scanner(self, source_code: str) -> Set[str]:
+    def _simple_scanner(self, source_code: str) -> Set[str]:  # noqa: C901
         """
         A minimalist external symbol scanner used as a fallback.
 
@@ -212,7 +159,7 @@ class CObfuscator:
 
         # Filter only significant tokens (ignore comments/whitespace)
         # We need a clean stream of "Code Tokens" to analyze grammar patterns.
-        sig_tokens = [m for m in matches if m.group(0).strip() and not m.group(4)]
+        sig_tokens = [m for m in matches if m.group(0).strip() and not m.group(5)]
 
         n = len(sig_tokens)
 
@@ -242,9 +189,11 @@ class CObfuscator:
                 prev_token_match = sig_tokens[prev_idx]
                 prev_ident = prev_token_match.group(3)
 
-                # If the previous token is a known C type keyword, this is likely a definition.
-                # Note: This misses user-defined types (structs aliases),
-                # but is safe enough for a heuristic (false negatives just mean less obfuscation).
+                # If the previous token is a known C type keyword, this is
+                # likely a definition.
+                # Note: This misses user-defined types (struct aliases),
+                # but is safe enough for a heuristic (false negatives just
+                # mean less obfuscation).
                 if prev_ident in self.TYPE_KEYWORDS:
                     is_type_def = True
 
@@ -255,7 +204,8 @@ class CObfuscator:
                     next_txt = sig_tokens[idx + 1].group(0)
                     if next_txt == "(":
                         # Function Definition Case: Must have a body `{ ... }`
-                        # If it ends with `;` instead of `{`, it's just a declaration (not defined here).
+                        # If it ends with `;` instead of `{`, it's just a
+                        # declaration (not defined here).
                         if self._has_function_body(sig_tokens, idx + 1):
                             defined.add(name)
                     else:
@@ -291,7 +241,7 @@ class CObfuscator:
                     return False  # Likely a declaration
         return False
 
-    def _identify_external_symbols(self, source_code: str) -> Set[str]:
+    def _identify_external_symbols(self, source_code: str) -> Set[str]:  # noqa: C901
         """
         Identifies external symbols. Uses gcc/nm if available, else heuristic.
         (Retained logic from previous version)
@@ -338,12 +288,12 @@ class CObfuscator:
                 if "temp_c" in locals() and os.path.exists(temp_c):
                     try:
                         os.unlink(temp_c)
-                    except:
+                    except OSError:
                         pass
                 if "temp_o" in locals() and os.path.exists(temp_o):
                     try:
                         os.unlink(temp_o)
-                    except:
+                    except OSError:
                         pass
 
         return self._simple_scanner(source_code)
@@ -362,9 +312,25 @@ class CObfuscator:
 
         return False
 
-    def obfuscate(self, source_code: str) -> str:
+    def _generate_metadata(self) -> str:
+        """
+        Generate the embedded metadata comment containing the identifier
+        mapping, so restoration works without a key file.
+        """
+        mapping_info = {"identifier_mapping": self.mm.mapping}
+        json_bytes = json.dumps(mapping_info).encode("utf-8")
+        compressed = zlib.compress(json_bytes)
+        encoded = base64.b64encode(compressed).decode("ascii")
+        return f"/* @mistode:metadata:{encoded} */"
+
+    def obfuscate(self, source_code: str, embed_metadata: bool = True) -> str:  # noqa: C901
         """
         Obfuscates C source code using layout engine approach.
+
+        Args:
+            source_code: Original C source code.
+            embed_metadata: Whether to append the identifier mapping as an
+                embedded comment (enables key-file-free restoration).
         """
         # Clear previous comments
         if self.filename in self.mm.comments:
@@ -391,11 +357,11 @@ class CObfuscator:
 
             # Identify if it is purely layout (comment or whitespace)
             is_layout = False
-            if match.group(4):  # Comment
+            if match.group(5):  # Comment
                 # We store comments in layout to preserve them
                 is_layout = True
-            elif match.group(5):  # Whitespace or Other
-                if not match.group(5).strip():  # Pure whitespace
+            elif match.group(6):  # Whitespace or Other
+                if not match.group(6).strip():  # Pure whitespace
                     is_layout = True
                 else:
                     # "Other" non-whitespace (operators like +, -, ;)
@@ -460,7 +426,12 @@ class CObfuscator:
             # Just append a chunk for trailing layout
             self._flush_line(output_lines, [], [{"p": pending_layout}])
 
-        return "\n".join(output_lines)
+        result = "\n".join(output_lines)
+
+        if embed_metadata:
+            result += "\n" + self._generate_metadata()
+
+        return result
 
     def _flush_line(self, output: List[str], tokens: List[str], layouts: List[Dict]):
         # Encode layout
@@ -473,7 +444,7 @@ class CObfuscator:
             output.append("".join(tokens))
         # We don't append \n to output list items, join will do it
 
-    def restore(self, source_code: str) -> str:
+    def restore(self, source_code: str) -> str:  # noqa: C901
         """
         Restores C source code using layout chunks.
         """
@@ -484,8 +455,9 @@ class CObfuscator:
         if metadata_match:
             try:
                 encoded_metadata = metadata_match.group(1).strip()
-                decoded = base64.b64decode(encoded_metadata).decode("utf-8")
-                data = json.loads(decoded)
+                decoded = base64.b64decode(encoded_metadata)
+                decompressed = zlib.decompress(decoded)
+                data = json.loads(decompressed.decode("utf-8"))
                 if not self.mm.mapping:
                     self.mm.mapping = data.get("identifier_mapping", {})
                     self.mm.reverse_mapping = {v: k for k, v in self.mm.mapping.items()}
@@ -498,14 +470,23 @@ class CObfuscator:
         # Map: line_index -> [layouts]
         # Since we have interleaved comments, we process sequentially.
 
-        # We will iterate lines, consume chunks into a queue, and consume code lines to match the queue.
+        # We will iterate lines, consume chunks into a queue, and consume
+        # code lines to match the queue.
 
         restored_parts = []
 
         pending_layouts = []
 
+        if not self.mm.mapping and not self.mm.reverse_mapping:
+            raise ValueError(
+                "No identifier mapping available for restoration. "
+                "The obfuscated file has no embedded metadata and no key file "
+                "was provided."
+            )
+
         # We need to tokenize the code lines to match with layouts
-        # Tokenizing line-by-line is safe because our obfuscator respects line boundaries relative to tokens.
+        # Tokenizing line-by-line is safe because our obfuscator respects
+        # line boundaries relative to tokens.
 
         for line in lines:
             stripped = line.strip()
@@ -517,12 +498,13 @@ class CObfuscator:
                     decompressed = zlib.decompress(decoded)
                     chunk_layouts = json.loads(decompressed.decode("utf-8"))
                     pending_layouts.extend(chunk_layouts)
-                except:
+                except Exception:
                     pass
                 continue
 
             # It's a code line (or empty)
-            # Remove the @mistode:metadata block if it exists on this line (unlikely given format)
+            # Remove the @mistode:metadata block if it exists on this line
+            # (unlikely given format)
             if "/* @mistode:metadata:" in line:
                 continue  # Skip legacy/metadata line entirely?
                 # Ideally we strip it. If it was distinct line, continue.
@@ -538,8 +520,8 @@ class CObfuscator:
                 # Flush layouts that have no tokens? e.g. trailing comments
                 # Iterate remaining layouts
                 while pending_layouts:
-                    l = pending_layouts.pop(0)
-                    restored_parts.append(l.get("p", ""))
+                    layout = pending_layouts.pop(0)
+                    restored_parts.append(layout.get("p", ""))
                 continue
 
             # Tokenize this line to match code tokens
@@ -557,7 +539,7 @@ class CObfuscator:
                 # We heavily rely on layout 'p' for restoration.
                 if not txt.strip():
                     continue
-                if m.group(4):
+                if m.group(5):
                     continue  # comments in obfuscated file?
                 # Only chunk comments exist, handled above.
                 code_tokens.append(txt)
@@ -579,7 +561,7 @@ class CObfuscator:
                 restored_parts.append(orig if orig else token)
 
         # Flush any remaining layouts (trailing)
-        for l in pending_layouts:
-            restored_parts.append(l.get("p", ""))
+        for layout in pending_layouts:
+            restored_parts.append(layout.get("p", ""))
 
         return "".join(restored_parts)

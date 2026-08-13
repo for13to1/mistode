@@ -23,7 +23,6 @@ from typing import Optional, Union
 
 from .c import CObfuscator
 from .core import MappingManager, NameGenerator
-from .encrypt import EncryptionManager
 from .python import PythonObfuscator
 
 
@@ -174,7 +173,8 @@ class ObfuscationService:
         except PermissionError:
             raise FileNotFound(
                 f"❌ Error: Permission denied: {path}\n"
-                f"💡 Hint: Check file permissions or try running with appropriate rights"
+                f"💡 Hint: Check file permissions or try running "  # noqa: E501
+                f"with appropriate rights"
             )
         except UnicodeDecodeError:
             raise FileNotFound(
@@ -182,7 +182,7 @@ class ObfuscationService:
                 f"💡 Hint: Ensure the file is a valid text file with UTF-8 encoding"
             )
         except Exception as e:
-            raise FileNotFound(f"❌ Error: Failed to read {path}\n" f"💡 Details: {e}")
+            raise FileNotFound(f"❌ Error: Failed to read {path}\n💡 Details: {e}")
 
     def _write_file(self, path: Path, content: str) -> None:
         try:
@@ -191,7 +191,8 @@ class ObfuscationService:
         except PermissionError:
             raise ObfuscationError(
                 f"❌ Error: Permission denied when writing: {path}\n"
-                f"💡 Hint: Check directory permissions or try a different output location"
+                f"💡 Hint: Check directory permissions or try a "  # noqa: E501
+                f"different output location"
             )
         except OSError as e:
             raise ObfuscationError(
@@ -200,9 +201,7 @@ class ObfuscationService:
                 f"💡 Hint: Ensure you have enough disk space and write permissions"
             )
         except Exception as e:
-            raise ObfuscationError(
-                f"❌ Error: Failed to write {path}\n" f"💡 Details: {e}"
-            )
+            raise ObfuscationError(f"❌ Error: Failed to write {path}\n💡 Details: {e}")
 
     def _load_mapping(self, key_file: Path) -> None:
         try:
@@ -210,16 +209,18 @@ class ObfuscationService:
         except OSError:  # Catch file not found and other OS errors
             raise ObfuscationError(
                 f"❌ Error: Key file not found: {key_file}\n"
-                f"💡 Hint: Ensure the key file exists or try restoration without --key (using embedded metadata)"
+                f"💡 Hint: Ensure the key file exists or try restoration "  # noqa: E501
+                f"without --key (using embedded metadata)"
             )
         except json.JSONDecodeError:
             raise ObfuscationError(
                 f"❌ Error: Invalid key file format: {key_file}\n"
-                f"💡 Hint: The key file may be corrupted. Try using embedded metadata instead."
+                f"💡 Hint: The key file may be corrupted. Try using "  # noqa: E501
+                f"embedded metadata instead."
             )
         except Exception as e:
             raise ObfuscationError(
-                f"❌ Error: Failed to load key file {key_file}\n" f"💡 Details: {e}"
+                f"❌ Error: Failed to load key file {key_file}\n💡 Details: {e}"
             )
 
     def _register_output_file(self, original_name: str, output_name: str) -> None:
@@ -232,10 +233,14 @@ class ObfuscationService:
         self, original: str, obfuscated: str, obfuscator
     ) -> None:
         """Collect statistics about the obfuscation process"""
-        import os
 
         # Count identifiers
-        total_identifiers = len(self.mm.mapping)
+        # PythonObfuscator tracks its own mapping in mapping_records,
+        # while CObfuscator uses MappingManager.mapping directly.
+        if hasattr(obfuscator, "mapping_records"):
+            total_identifiers = len(obfuscator.mapping_records["identifier_mapping"])
+        else:
+            total_identifiers = len(self.mm.mapping)
         preserved_count = 0
 
         # Try to count preserved identifiers (imports/builtins)
@@ -269,7 +274,8 @@ class ObfuscationService:
         print(f"  Identifiers obfuscated: {self.stats_data['total_identifiers']}")
         if self.stats_data["preserved_identifiers"] > 0:
             print(
-                f"  Preserved identifiers: {self.stats_data['preserved_identifiers']} (imports/builtins)"
+                f"  Preserved identifiers: "  # noqa: E501
+                f"{self.stats_data['preserved_identifiers']} (imports/builtins)"
             )
 
         # Format file sizes
@@ -278,7 +284,8 @@ class ObfuscationService:
         print(f"  Original size: {orig_kb:.2f} KB")
         print(f"  Obfuscated size: {obf_kb:.2f} KB")
         print(
-            f"  Size change: {self.stats_data['size_increase']:+d} bytes ({self.stats_data['size_percent']:+.1f}%)"
+            f"  Size change: {self.stats_data['size_increase']:+d} bytes "  # noqa: E501
+            f"({self.stats_data['size_percent']:+.1f}%)"
         )
 
         # Restoration method
@@ -313,7 +320,6 @@ class ArgumentParser:
         config = {}
 
         # Try to find and load pyproject.toml
-        import os
 
         cwd = Path.cwd()
 
@@ -453,8 +459,7 @@ class ArgumentParser:
         if cmd in aliases:
             return aliases[cmd]
         raise CLIError(
-            f"Invalid command: {cmd}. "
-            f"Use 'obfuscate' (or 'o') or 'restore' (or 'r')."
+            f"Invalid command: {cmd}. Use 'obfuscate' (or 'o') or 'restore' (or 'r')."
         )
 
     def _detect_language(self, ext: str) -> Language:

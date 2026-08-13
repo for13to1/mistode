@@ -1,8 +1,3 @@
-import io
-import tokenize
-
-import pytest
-
 from mistode.core import MappingManager, NameGenerator
 from mistode.layout import LayoutEngine
 from mistode.python import PythonObfuscator
@@ -28,11 +23,11 @@ def foo():
         # Should have multiple chunks
         # One for 'def foo():', one for 'x=1', one for 'return x'
         lines = obfuscated.splitlines()
-        chunk_lines = [l for l in lines if l.startswith("#@mistode:chunk:")]
+        chunk_lines = [line for line in lines if line.startswith("#@mistode:chunk:")]
 
-        assert (
-            len(chunk_lines) >= 3
-        ), f"Expected at least 3 layout chunks, found {len(chunk_lines)}"
+        assert len(chunk_lines) >= 3, (
+            f"Expected at least 3 layout chunks, found {len(chunk_lines)}"
+        )
 
         # Restoration check
         restored = obfuscator.restore(None, obfuscated)

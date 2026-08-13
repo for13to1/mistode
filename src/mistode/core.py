@@ -198,8 +198,7 @@ class NameGenerator:
         """
         if style not in ["similar", "random"]:
             raise ValueError(
-                f"Unsupported style: {style}, only 'similar' and 'random' "
-                "are supported"
+                f"Unsupported style: {style}, only 'similar' and 'random' are supported"
             )
         self.style = style
 
