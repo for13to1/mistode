@@ -22,7 +22,7 @@ Mistode (Mist Code, pronounced like *miss-told*) is a lightweight, advanced code
 - **🐍 Python Support (v3.14+)**:
   - **AST-Based Precision**: Parses the Abstract Syntax Tree for safe and accurate transformation.
   - **Smart Preservation**: Automatically protects imports, built-ins (`print`, `len`), and standard library calls.
-  - **Docstring Hashing**: Replaces docstrings with unique hash markers.
+  - **Docstring Hiding**: Replaces docstrings with minimal placeholders (restored losslessly from embedded layout data).
 
 - **🇨 C Support**:
   - **Robust Tokenization**: Regex-based engine safely handling macros, pointers, and structs.
@@ -124,7 +124,7 @@ For a detailed guide, see [examples/CONFIG_GUIDE.md](examples/CONFIG_GUIDE.md).
 | :--- | :---: | :--- |
 | **Variable Names** | ✅ | Replaced with tokens |
 | **Function/Class Names** | ✅ | Replaced with tokens |
-| **Docstrings** | ✅ | Replaced with hash placeholders |
+| **Docstrings** | ✅ | Replaced with placeholders (restored losslessly) |
 | **Imports** | ❌ | Preserved (`import math`) |
 | **Built-ins** | ❌ | Preserved (`print`, `len`) |
 | **Stdlib Methods** | ❌ | Preserved (`os.path.join`) |
@@ -135,9 +135,9 @@ For a detailed guide, see [examples/CONFIG_GUIDE.md](examples/CONFIG_GUIDE.md).
 | :--- | :---: | :--- |
 | **Functions** | ✅ | User-defined only |
 | **Variables/Structs** | ✅ | Local and Global |
-| **Comments** | ✅ | Scrambled or Removed |
+| **Comments** | ✅ | Hidden in obfuscated output (restored losslessly) |
 | **Keywords** | ❌ | Preserved (`if`, `while`) |
-| **Preprocessor** | ❌ | Preserved (`#include`, `#define`) |
+| **Preprocessor** | ❌ | Preserved (`#include`, `#define`, macro names) |
 | **Std Lib** | ❌ | Preserved (`printf`, `malloc`) |
 
 ## Restoration Mechanics

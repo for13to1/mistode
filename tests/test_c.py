@@ -422,6 +422,38 @@ int main() {
     assert "((" in obfuscated
 
 
+def test_c_obfuscator_preserves_macro_names():
+    """
+    Regression: macro names following `#define` must not be obfuscated,
+    matching the documented 'Preprocessor Preserved' guarantee.
+    """
+    code = """
+#define MAX_SIZE 100
+#define PI 3.14159
+#define SQUARE(x) ((x) * (x))
+
+int main() {
+    int result = SQUARE(5);
+    return MAX_SIZE;
+}
+"""
+
+    from src.mistode import c
+    from src.mistode.core import MappingManager, NameGenerator
+
+    mm = MappingManager()
+    gen = NameGenerator()
+    obfuscator = c.CObfuscator(mm, gen)
+    obfuscated = obfuscator.obfuscate(code)
+
+    assert "#define MAX_SIZE 100" in obfuscated
+    assert "#define PI 3.14159" in obfuscated
+    assert "#define SQUARE" in obfuscated
+    # Use sites stay consistent with the preserved macro names
+    assert "SQUARE(5)" in obfuscated
+    assert "MAX_SIZE" in obfuscated
+
+
 def test_c_obfuscator_heuristic_scanner():
     """
     Test the parsing heuristic for identifying defined vs external symbols

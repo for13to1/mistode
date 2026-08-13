@@ -339,6 +339,16 @@ class CObfuscator:
         external_symbols = self._identify_external_symbols(source_code)
         whitelisted = self.reserved_identifiers | external_symbols
 
+        # Preserve macro names (the identifier following `#define`).
+        # Macro bodies keep normal obfuscation, which is safe because both
+        # the definition and all use sites go through the same mapping.
+        for define_match in re.finditer(
+            r"^[ \t]*#[ \t]*define[ \t]+([a-zA-Z_]\w*)",
+            source_code,
+            re.MULTILINE,
+        ):
+            whitelisted.add(define_match.group(1))
+
         # Stream Processing
         # We collect "Logical Lines"
         # A logical line ends when the 'layout' contains a newline.

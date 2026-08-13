@@ -1,0 +1,147 @@
+# Copyright (C) 2026 for13to1 <for13to1@outlook.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+"""
+End-to-end tests.
+
+These exercise the real CLI in a separate process (fresh MappingManager),
+covering the full obfuscate -> restore -> diff cycle that unit tests using
+a shared in-memory mapping cannot catch (e.g. metadata embedding bugs).
+"""
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+PYTHON_SRC = """\
+# A sample module with imports, builtins, and docstrings
+import math
+from datetime import datetime
+
+
+def calculate_area(radius):
+    \"\"\"Calculate circle area\"\"\"
+    return math.pi * radius ** 2
+
+
+def format_result(value):
+    return f"Result: {value:.2f}"
+
+
+if __name__ == "__main__":
+    print(format_result(calculate_area(2.0)))
+"""
+
+C_SRC = """\
+#include <stdio.h>
+
+#define PI 3.14159
+
+struct Point {
+    double x;
+    double y;
+};
+
+double distance_squared(struct Point *p) {
+    double dx = p->x;
+    double dy = p->y;
+    return dx * dx + dy * dy;
+}
+
+int main() {
+    struct Point p;
+    p.x = 3.0;
+    p.y = 4.0;
+    printf("distance^2: %f\\n", distance_squared(&p));
+    return 0;
+}
+"""
+
+
+def run_cli(*args: str) -> subprocess.CompletedProcess:
+    """Run the mistode CLI in a separate process (true cross-process test)."""
+    return subprocess.run(
+        [sys.executable, "-m", "mistode", *args],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parent.parent,
+    )
+
+
+class TestPythonEndToEnd:
+    def test_obfuscate_restore_is_lossless(self, tmp_path: Path):
+        src = tmp_path / "app.py"
+        src.write_text(PYTHON_SRC, encoding="utf-8")
+        obf = tmp_path / "app.obf.py"
+        res = tmp_path / "app.res.py"
+
+        result = run_cli("o", str(src), "--out", str(obf))
+        assert result.returncode == 0, result.stderr
+        assert obf.exists()
+
+        result = run_cli("r", str(obf), "--out", str(res))
+        assert result.returncode == 0, result.stderr
+        assert res.read_text(encoding="utf-8") == PYTHON_SRC
+
+    def test_obfuscated_code_is_valid_python(self, tmp_path: Path):
+        src = tmp_path / "app.py"
+        src.write_text(PYTHON_SRC, encoding="utf-8")
+        obf = tmp_path / "app.obf.py"
+
+        result = run_cli("o", str(src), "--out", str(obf))
+        assert result.returncode == 0, result.stderr
+
+        # The obfuscated file must still be importable/parseable
+        check = subprocess.run(
+            [sys.executable, "-c", f"import ast; ast.parse(open({str(obf)!r}).read())"],
+            capture_output=True,
+            text=True,
+        )
+        assert check.returncode == 0, check.stderr
+
+
+class TestCEndToEnd:
+    def test_obfuscate_restore_is_lossless(self, tmp_path: Path):
+        src = tmp_path / "main.c"
+        src.write_text(C_SRC, encoding="utf-8")
+        obf = tmp_path / "main.obf.c"
+        res = tmp_path / "main.res.c"
+
+        result = run_cli("o", str(src), "--out", str(obf))
+        assert result.returncode == 0, result.stderr
+        assert obf.exists()
+
+        result = run_cli("r", str(obf), "--out", str(res))
+        assert result.returncode == 0, result.stderr
+        assert res.read_text(encoding="utf-8") == C_SRC
+
+    @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
+    def test_obfuscated_code_compiles(self, tmp_path: Path):
+        src = tmp_path / "main.c"
+        src.write_text(C_SRC, encoding="utf-8")
+        obf = tmp_path / "main.obf.c"
+
+        result = run_cli("o", str(src), "--out", str(obf))
+        assert result.returncode == 0, result.stderr
+
+        compile_result = subprocess.run(
+            ["gcc", "-c", str(obf), "-o", str(tmp_path / "main.o")],
+            capture_output=True,
+            text=True,
+        )
+        assert compile_result.returncode == 0, compile_result.stderr
