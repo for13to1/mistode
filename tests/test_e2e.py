@@ -242,6 +242,53 @@ class TestProjectMode:
             restored = (res_dir / rel).read_bytes()
             assert restored == original
 
+    def test_project_skips_cache_and_venv_dirs(self, tmp_path: Path):
+        proj = tmp_path / "proj"
+        (proj / "__pycache__").mkdir(parents=True)
+        (proj / ".venv" / "lib").mkdir(parents=True)
+        (proj / "__pycache__" / "cached.py").write_text("x = 1\n")
+        (proj / ".venv" / "lib" / "venvmod.py").write_text("y = 2\n")
+        (proj / "real.py").write_text("z = 3\n")
+
+        obf_dir = proj.with_name("proj.obf")
+        result = run_cli("o", str(proj))
+        assert result.returncode == 0, result.stderr
+
+        # Only the real source file is obfuscated
+        assert (obf_dir / "real.py").exists()
+        assert not (obf_dir / "__pycache__").exists()
+        assert not (obf_dir / ".venv").exists()
+
+    def test_project_gbk_file_with_import(self, tmp_path: Path):
+        """Cross-file import analysis must use the file's real encoding,
+        so a GBK file containing an import still protects the imported
+        name in the other module."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "leaf.py").write_text("def helper():\n    return 1\n")
+        (proj / "mid.py").write_bytes(
+            (
+                "# -*- coding: gbk -*-\n"
+                "# 中文注释\n"
+                "from leaf import helper\n\n"
+                "def run():\n"
+                "    return helper()\n"
+            ).encode("gbk")
+        )
+        (proj / "app.py").write_text("from mid import run\n\nprint(run())\n")
+
+        obf_dir = proj.with_name("proj.obf")
+        result = run_cli("o", str(proj))
+        assert result.returncode == 0, result.stderr
+
+        run = subprocess.run(
+            [sys.executable, str(obf_dir / "app.py")],
+            capture_output=True,
+            text=True,
+        )
+        assert run.returncode == 0, run.stderr
+        assert run.stdout.strip() == "1"
+
 
 class TestEncryption:
     """--password encryption round-trip via the real CLI."""

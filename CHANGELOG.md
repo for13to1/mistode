@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Project (directory) mode: `mistode o <dir>` obfuscates a whole project
+  into a mirrored tree (e.g. `src/` -> `src.obf/`) keeping original
+  filenames so imports/includes keep working, and `mistode r <dir>`
+  restores it byte-identically
+- Cross-file reference preservation in project mode: names imported via
+  `from mod import name` (Python) and symbols shared across compilation
+  units (C) keep their names in every file
+- Skip virtualenv/cache directories (`.venv`, `__pycache__`, `.git`, ...)
+  when collecting project files
+
+### Fixed
+
+- Cross-file import/symbol analysis now reads files with their detected
+  encoding (previously UTF-8-only reads silently skipped non-UTF-8 files,
+  breaking cross-file references in GBK/Big5 projects)
+- Syntax errors in Python sources now produce a friendly error message
+  instead of a raw traceback
+
 ## [0.1.3] - 2026-08-14
 
 ### Added

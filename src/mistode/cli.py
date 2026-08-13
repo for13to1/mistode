@@ -108,12 +108,17 @@ class ObfuscationService:
         if options.language == Language.PYTHON:
             obfuscator = PythonObfuscator(self.mm, self.gen, options.input_file.name)
             key_path = str(options.key_file) if options.key_file else None
-            result = obfuscator.obfuscate(
-                content,
-                key_path,
-                encryption_key=options.password,
-                source_encoding=encoding,
-            )
+            try:
+                result = obfuscator.obfuscate(
+                    content,
+                    key_path,
+                    encryption_key=options.password,
+                    source_encoding=encoding,
+                )
+            except SyntaxError as e:
+                raise ObfuscationError(
+                    f"❌ Error: Failed to parse {options.input_file}\n💡 Details: {e}"
+                )
         else:
             obfuscator = CObfuscator(self.mm, self.gen, options.input_file.name)
             result = obfuscator.obfuscate(content, source_encoding=encoding)
@@ -180,13 +185,34 @@ class ObfuscationService:
             self._print_success("Key used: Embedded metadata")
 
     SUPPORTED_EXTS = {".py", ".c", ".h", ".cpp"}
+    SKIP_DIRS = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "env",
+        "__pycache__",
+        "node_modules",
+        "dist",
+        "build",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+    }
 
     def _collect_source_files(self, directory: Path) -> list[Path]:
-        """Recursively collect supported source files under a directory."""
+        """Recursively collect supported source files under a directory,
+        skipping version-control, virtualenv, and cache directories."""
         return sorted(
             p
             for p in directory.rglob("*")
-            if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTS
+            if p.is_file()
+            and p.suffix.lower() in self.SUPPORTED_EXTS
+            and not any(
+                part in self.SKIP_DIRS for part in p.relative_to(directory).parts
+            )
         )
 
     def _language_for_file(self, path: Path) -> Language:
@@ -203,7 +229,8 @@ class ObfuscationService:
             if self._language_for_file(f) != Language.PYTHON:
                 continue
             try:
-                tree = ast.parse(f.read_text(encoding="utf-8"))
+                encoding = self._detect_encoding(f)
+                tree = ast.parse(self._read_file(f, encoding))
             except OSError, UnicodeDecodeError, SyntaxError:
                 continue
             for node in ast.walk(tree):
@@ -227,7 +254,8 @@ class ObfuscationService:
             if self._language_for_file(f) != Language.C:
                 continue
             try:
-                content = f.read_text(encoding="utf-8")
+                encoding = self._detect_encoding(f)
+                content = self._read_file(f, encoding)
             except OSError, UnicodeDecodeError:
                 continue
             defined_per_file[f] = scanner._scan_defined_symbols(content)
@@ -276,11 +304,16 @@ class ObfuscationService:
                 obfuscator = PythonObfuscator(self.mm, self.gen, f.name)
                 # Names imported elsewhere in the project must not change
                 obfuscator.ignore_set.update(python_imports)
-                result = obfuscator.obfuscate(
-                    content,
-                    encryption_key=options.password,
-                    source_encoding=encoding,
-                )
+                try:
+                    result = obfuscator.obfuscate(
+                        content,
+                        encryption_key=options.password,
+                        source_encoding=encoding,
+                    )
+                except SyntaxError as e:
+                    raise ObfuscationError(
+                        f"❌ Error: Failed to parse {f}\n💡 Details: {e}"
+                    )
             else:
                 obfuscator = CObfuscator(self.mm, self.gen, f.name)
                 # Symbols shared across files must keep their names
