@@ -30,13 +30,16 @@ Mistode (Mist Code, pronounced like *miss-told*) is a lightweight, advanced code
   - **Symbol Safety**: Automatically preserves keywords, preprocessor directives, and standard headers.
 
 - **🔄 Zero-Loss Restoration**:
-  - **Distributed Source Chunks**: The original source is compressed, encrypted, and distributed throughout the obfuscated file as comments.
-  - **Embedded Metadata**: Identifier mappings are embedded directly in the file header/footer. **No key file is required for restoration.**
+  - **Distributed Layout Data**: Layout data (whitespace, comments, and
+    string contents) is compressed and distributed throughout the
+    obfuscated file as comments (base64 by default, encrypted with
+    `--password`).
+  - **Embedded Metadata**: Identifier mappings are embedded directly in the file footer. **No key file is required for restoration.**
   - **Bit-Perfect Restore**: Restores every byte of the original code, including comments, formatting, and empty lines.
 
 - **⚙️ Modern Tooling**:
   - **Configuration File**: Global defaults via `pyproject.toml`.
-  - **Detailed Statistics**: `--stats` flag provides identifier counts, compression ratios, and safety checks.
+  - **Detailed Statistics**: `--stats` flag provides identifier counts, preserved-name counts, and file-size analysis.
 
 ## Installation
 
@@ -144,8 +147,8 @@ For a detailed guide, see [examples/CONFIG_GUIDE.md](examples/CONFIG_GUIDE.md).
 
 Mistode uses a **dual-layer restoration system** to guarantee safety:
 
-1. **Distributed Source Chunks (Primary)**:
-    Chunks of the compressed original source are injected as comments (e.g., `#@mistode:chunk:...`) throughout the file. This allows **100% bit-perfect restoration**.
+1. **Distributed Layout Data (Primary)**:
+    Layout data (whitespace, comments, and string contents) is compressed and injected as comments (e.g., `#@mistode:chunk:...`) throughout the file. This allows **100% bit-perfect restoration**.
 
 2. **Embedded Mappings (Secondary)**:
     The renaming map is compressed and embedded in the file footer (`#@mistode:metadata:`). If chunks are damaged, this allows functional restoration.

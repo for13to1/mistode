@@ -13,6 +13,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and typedef aliases) during heuristic external-symbol discovery, so
   declarations like `Point q;` are obfuscated instead of being mistaken
   for external symbols
+- CLI end-to-end tests (real subprocess, fresh MappingManager) covering
+  Python/C lossless restore and C compilation via gcc
+- Layout edge-case tests (nested f-strings, hashes inside strings,
+  multiline strings, async/comprehensions, docstring variants) with
+  functional-equivalence assertions
+- Encryption (`--password`) and `--seed` determinism end-to-end tests
+
+### Changed
+
+- Support non-UTF-8 encodings (GBK, Big5, Shift_JIS, UTF-16/32, BOM):
+  encoding is auto-detected, obfuscated output is always UTF-8 (so it
+  stays executable/compilable), and restoration writes back in the
+  original encoding for byte-identical output
+- Preserve CRLF line endings end-to-end for bit-perfect restoration
+  (previously `\r` was normalized away on read)
+- Preserve names declared in module-level `__all__` so library exports
+  survive obfuscation
+- Migrate lint/format tooling from black/isort/flake8 to ruff
+  (single config, single CI step)
+- Modernize typing for the 3.14 floor (built-in generics, `X | None`,
+  `tokenize.FSTRING_START/END` without getattr fallback)
+- README/README_ZH now describe the actual layout-engine mechanism and
+  document known limitations
+
+### Fixed
+
+- C numeric literals were split into per-character tokens (`3.14159`
+  became `3.1 4 1 5 9`), making obfuscated C uncompilable; added a
+  numeric group to the tokenizer regex
+- C restoration across processes failed because the identifier mapping
+  was never embedded in the obfuscated output (and the embedded
+  metadata was not zlib-decompressed on read); mapping metadata is now
+  embedded and parsed correctly
+- `--stats` reported 0 identifiers for Python because it read the
+  wrong mapping source
+- C macro names following `#define` were obfuscated despite the
+  documented "Preprocessor Preserved" guarantee
+- AST column offsets (UTF-8 byte offsets) are now converted to tokenize
+  character offsets, so identifiers after multibyte characters (CJK)
+  are renamed consistently
+- PEP 263 coding declarations were lost during obfuscation; the
+  original encoding is now carried in the metadata
+- Empty-but-valid identifier mappings (files with no obfuscatable
+  names) no longer fail restoration
 
 ## [0.1.2] - 2026-01-12
 
