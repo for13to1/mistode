@@ -80,6 +80,30 @@ gcc main.obf.c -o main_obf
 mistode r main.obf.c
 ```
 
+### 3. Project (Directory) Mode
+
+Pass a directory instead of a single file to obfuscate a whole project:
+
+```bash
+# Obfuscate src/ into src.obf/ (mirrored tree, original filenames kept
+# so imports/includes keep working; cross-file references are preserved)
+mistode o src/
+
+# Run the obfuscated project directly (Python)
+python src.obf/app.py
+
+# Or compile it (C)
+gcc -Isrc.obf src.obf/main.c src.obf/util.c -o app
+
+# Restore the whole project byte-identically
+mistode r src.obf/   # produces src.res/
+```
+
+Project mode handles cross-file references automatically: names imported
+via `from mod import name` (Python) and symbols shared across compilation
+units (C) are preserved in every file, so the obfuscated project stays
+run/compilable.
+
 ## Usage Guide
 
 ### Command Line Interface

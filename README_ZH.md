@@ -77,6 +77,29 @@ gcc main.obf.c -o main_obf
 mistode r main.obf.c
 ```
 
+### 3. 项目（目录）模式
+
+传入目录而不是单个文件，即可混淆整个项目：
+
+```bash
+# 将 src/ 混淆到 src.obf/（镜像目录结构，保留原文件名，
+# 保证 import/include 不断；跨文件引用自动保留）
+mistode o src/
+
+# 直接运行混淆后的项目（Python）
+python src.obf/app.py
+
+# 或编译（C）
+gcc -Isrc.obf src.obf/main.c src.obf/util.c -o app
+
+# 逐字节还原整个项目
+mistode r src.obf/   # 生成 src.res/
+```
+
+项目模式自动处理跨文件引用：通过 `from mod import name` 导入的名字
+（Python）和跨编译单元共享的符号（C）在每个文件中都保留原名，
+因此混淆后的项目仍可运行/编译。
+
 ## 使用指南
 
 ### 命令行接口

@@ -147,6 +147,102 @@ class TestCEndToEnd:
         assert compile_result.returncode == 0, compile_result.stderr
 
 
+class TestProjectMode:
+    """Directory (project) mode: multi-file obfuscation and restore."""
+
+    def test_python_project_roundtrip_and_runs(self, tmp_path: Path):
+        proj = tmp_path / "proj"
+        (proj / "utils").mkdir(parents=True)
+        (proj / "utils" / "mod.py").write_text(
+            "def helper():\n    return 42\n\ndef _private():\n    return 1\n",
+            encoding="utf-8",
+        )
+        (proj / "app.py").write_text(
+            "from utils.mod import helper\n"
+            "import utils.mod as m\n\n"
+            "def main():\n"
+            "    return helper() + m._private()\n\n"
+            "print(main())\n",
+            encoding="utf-8",
+        )
+
+        obf_dir = proj.with_name("proj.obf")
+        result = run_cli("o", str(proj))
+        assert result.returncode == 0, result.stderr
+        # Mirror structure with original filenames (imports must keep working)
+        assert (obf_dir / "app.py").exists()
+        assert (obf_dir / "utils" / "mod.py").exists()
+
+        # The obfuscated project must run and produce the same output
+        run = subprocess.run(
+            [sys.executable, str(obf_dir / "app.py")],
+            capture_output=True,
+            text=True,
+        )
+        assert run.returncode == 0, run.stderr
+        assert run.stdout.strip() == "43"
+
+        res_dir = proj.with_name("proj.res")
+        result = run_cli("r", str(obf_dir))
+        assert result.returncode == 0, result.stderr
+
+        for rel in ("app.py", "utils/mod.py"):
+            original = (proj / rel).read_bytes()
+            restored = (res_dir / rel).read_bytes()
+            assert restored == original
+
+    @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
+    def test_c_project_compiles_and_roundtrips(self, tmp_path: Path):
+        proj = tmp_path / "cproj"
+        proj.mkdir()
+        (proj / "util.h").write_text(
+            "#ifndef UTIL_H\n#define UTIL_H\nint shared_add(int a, int b);\n#endif\n",
+            encoding="utf-8",
+        )
+        (proj / "util.c").write_text(
+            '#include "util.h"\n\nint shared_add(int a, int b) {\n    return a + b;\n}\n',
+            encoding="utf-8",
+        )
+        (proj / "main.c").write_text(
+            '#include <stdio.h>\n#include "util.h"\n\n'
+            "int main() {\n"
+            '    printf("%d\\n", shared_add(2, 3));\n'
+            "    return 0;\n}\n",
+            encoding="utf-8",
+        )
+
+        obf_dir = proj.with_name("cproj.obf")
+        result = run_cli("o", str(proj))
+        assert result.returncode == 0, result.stderr
+
+        # Obfuscated project must still compile and link
+        compile_result = subprocess.run(
+            [
+                "gcc",
+                "-I",
+                str(obf_dir),
+                str(obf_dir / "main.c"),
+                str(obf_dir / "util.c"),
+                "-o",
+                str(tmp_path / "app"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert compile_result.returncode == 0, compile_result.stderr
+        run = subprocess.run([str(tmp_path / "app")], capture_output=True, text=True)
+        assert run.stdout.strip() == "5"
+
+        res_dir = proj.with_name("cproj.res")
+        result = run_cli("r", str(obf_dir))
+        assert result.returncode == 0, result.stderr
+
+        for rel in ("util.h", "util.c", "main.c"):
+            original = (proj / rel).read_bytes()
+            restored = (res_dir / rel).read_bytes()
+            assert restored == original
+
+
 class TestEncryption:
     """--password encryption round-trip via the real CLI."""
 

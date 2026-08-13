@@ -218,6 +218,16 @@ class CObfuscator:
         # External symbols = All Used - All Defined - Reserved
         return all_ids - defined - self.reserved_identifiers
 
+    def _scan_defined_symbols(self, source_code: str) -> set[str]:
+        """
+        Return identifiers *defined* in this file (functions, variables,
+        parameters). Used by directory mode to preserve symbols that are
+        shared across files.
+        """
+        external = self._simple_scanner(source_code)
+        all_ids = {m.group(3) for m in self._tokenize(source_code) if m.group(3)}
+        return all_ids - external - self.reserved_identifiers
+
     def _collect_user_types(self, sig_tokens: list[re.Match[str]]) -> set[str]:
         """
         Collect user-defined type names declared in this file:
@@ -366,6 +376,7 @@ class CObfuscator:
         source_code: str,
         embed_metadata: bool = True,
         source_encoding: str | None = None,
+        extra_whitelisted: set[str] | None = None,
     ) -> str:
         """
         Obfuscates C source code using layout engine approach.
@@ -376,6 +387,9 @@ class CObfuscator:
                 embedded comment (enables key-file-free restoration).
             source_encoding: Encoding of the original source file, stored
                 in the metadata so restoration is byte-identical.
+            extra_whitelisted: Additional identifiers to preserve (e.g.
+                symbols defined in *other* files of the same project, so
+                cross-file references stay intact in directory mode).
         """
         self.mm.source_encoding = source_encoding
         # Clear previous comments
@@ -384,6 +398,8 @@ class CObfuscator:
 
         external_symbols = self._identify_external_symbols(source_code)
         whitelisted = self.reserved_identifiers | external_symbols
+        if extra_whitelisted:
+            whitelisted |= extra_whitelisted
 
         # Preserve macro names (the identifier following `#define`).
         # Macro bodies keep normal obfuscation, which is safe because both

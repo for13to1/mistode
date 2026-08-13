@@ -14,6 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
+import ast
 import json
 import sys
 from dataclasses import dataclass
@@ -96,6 +97,10 @@ class ObfuscationService:
 
     def _obfuscate(self) -> None:
         options = self.options
+        if options.input_file.is_dir():
+            self._obfuscate_directory()
+            return
+
         encoding = self._detect_encoding(options.input_file)
         content = self._read_file(options.input_file, encoding)
 
@@ -137,6 +142,10 @@ class ObfuscationService:
 
     def _restore(self) -> None:
         options = self.options
+        if options.input_file.is_dir():
+            self._restore_directory()
+            return
+
         encoding = self._detect_encoding(options.input_file)
         content = self._read_file(options.input_file, encoding)
 
@@ -169,6 +178,158 @@ class ObfuscationService:
             self._print_success(f"Key used: {options.key_file}")
         else:
             self._print_success("Key used: Embedded metadata")
+
+    SUPPORTED_EXTS = {".py", ".c", ".h", ".cpp"}
+
+    def _collect_source_files(self, directory: Path) -> list[Path]:
+        """Recursively collect supported source files under a directory."""
+        return sorted(
+            p
+            for p in directory.rglob("*")
+            if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTS
+        )
+
+    def _language_for_file(self, path: Path) -> Language:
+        return Language.PYTHON if path.suffix.lower() == ".py" else Language.C
+
+    def _collect_cross_file_imports(self, files: list[Path]) -> set[str]:
+        """
+        Python project mode: names imported via `from X import name`
+        anywhere in the project. These must keep their original names in
+        every file so cross-module references survive.
+        """
+        imported: set[str] = set()
+        for f in files:
+            if self._language_for_file(f) != Language.PYTHON:
+                continue
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+            except OSError, UnicodeDecodeError, SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        if alias.name != "*":
+                            imported.add(alias.name)
+        return imported
+
+    def _collect_cross_file_symbols(self, files: list[Path]) -> set[str]:
+        """
+        C project mode: identifiers *defined* in one file and appearing in
+        at least two files (e.g. via a shared header). These are shared
+        across compilation units and must keep their original names in
+        every file so the project still links.
+        """
+        scanner = CObfuscator(self.mm, self.gen, "scan")
+        defined_per_file: dict[Path, set[str]] = {}
+        all_ids_per_file: dict[Path, set[str]] = {}
+        for f in files:
+            if self._language_for_file(f) != Language.C:
+                continue
+            try:
+                content = f.read_text(encoding="utf-8")
+            except OSError, UnicodeDecodeError:
+                continue
+            defined_per_file[f] = scanner._scan_defined_symbols(content)
+            all_ids_per_file[f] = {
+                m.group(3) for m in scanner._tokenize(content) if m.group(3)
+            }
+
+        occurrences: dict[str, int] = {}
+        for syms in all_ids_per_file.values():
+            for sym in syms:
+                occurrences[sym] = occurrences.get(sym, 0) + 1
+
+        any_defined: set[str] = set()
+        for syms in defined_per_file.values():
+            any_defined |= syms
+
+        return {
+            sym
+            for sym, count in occurrences.items()
+            if count >= 2 and sym in any_defined
+        }
+
+    def _obfuscate_directory(self) -> None:
+        options = self.options
+        files = self._collect_source_files(options.input_file)
+        if not files:
+            raise ObfuscationError(
+                f"❌ Error: No supported source files (.py/.c/.h/.cpp) "
+                f"found in {options.input_file}"
+            )
+
+        out_dir = options.output_file
+        assert out_dir is not None
+
+        # Cross-file analysis so references between files stay intact
+        python_imports = self._collect_cross_file_imports(files)
+        c_shared = self._collect_cross_file_symbols(files)
+
+        for f in files:
+            rel = f.relative_to(options.input_file)
+            out = out_dir / rel
+            encoding = self._detect_encoding(f)
+            content = self._read_file(f, encoding)
+
+            if self._language_for_file(f) == Language.PYTHON:
+                obfuscator = PythonObfuscator(self.mm, self.gen, f.name)
+                # Names imported elsewhere in the project must not change
+                obfuscator.ignore_set.update(python_imports)
+                result = obfuscator.obfuscate(
+                    content,
+                    encryption_key=options.password,
+                    source_encoding=encoding,
+                )
+            else:
+                obfuscator = CObfuscator(self.mm, self.gen, f.name)
+                # Symbols shared across files must keep their names
+                result = obfuscator.obfuscate(
+                    content,
+                    source_encoding=encoding,
+                    extra_whitelisted=c_shared,
+                )
+            self._write_file(out, result)
+
+        self._print_success(
+            f"Obfuscated {options.input_file} -> {out_dir} ({len(files)} files)"
+        )
+
+    def _restore_directory(self) -> None:
+        options = self.options
+        files = self._collect_source_files(options.input_file)
+        if not files:
+            raise ObfuscationError(
+                f"❌ Error: No source files found in {options.input_file}"
+            )
+
+        out_dir = options.output_file
+        assert out_dir is not None
+
+        for f in files:
+            rel = f.relative_to(options.input_file)
+            out = out_dir / rel
+            encoding = self._detect_encoding(f)
+            content = self._read_file(f, encoding)
+
+            try:
+                if self._language_for_file(f) == Language.PYTHON:
+                    obfuscator = PythonObfuscator(self.mm, self.gen, f.name)
+                    result = obfuscator.restore(
+                        None, content, encryption_key=options.password
+                    )
+                else:
+                    obfuscator = CObfuscator(self.mm, self.gen, f.name)
+                    result = obfuscator.restore(content)
+            except ValueError as e:
+                raise ObfuscationError(str(e))
+
+            restore_encoding = obfuscator.mm.source_encoding or encoding
+            self._write_file(out, result, restore_encoding)
+
+        self._print_success(
+            f"Restored {options.input_file} -> {out_dir} ({len(files)} files)"
+        )
 
     def _detect_encoding(self, path: Path) -> str:
         """
@@ -521,6 +682,15 @@ class ArgumentParser:
     def _resolve_output_path(self, input_path: Path, out: str, cmd: Command) -> Path:
         if out:
             return Path(out)
+
+        # Directory (project) mode: mirror the tree, keep original filenames
+        if input_path.is_dir():
+            if cmd == Command.OBFUSCATE:
+                return Path(str(input_path) + ".obf")
+            name = str(input_path)
+            if name.endswith(".obf"):
+                name = name[:-4]
+            return Path(name + ".res")
 
         parent = input_path.parent
         stem = input_path.stem
