@@ -494,7 +494,7 @@ class PythonObfuscator:
 
     def restore(  # noqa: C901
         self,
-        mapping_file: str,
+        mapping_file: str | None = None,
         obfuscated_code: str | None = None,
         encryption_key: str | None = None,
     ) -> str:

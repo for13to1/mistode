@@ -153,6 +153,23 @@ Mistode uses a **dual-layer restoration system** to guarantee safety:
 3. **Key File (Optional)**:
     You can explicitly save the mapping to a JSON file with `--key`, but it is not required for standard workflows.
 
+## Known Limitations
+
+- **Dynamic access is not tracked**: names accessed via strings
+  (`globals()[...]`, `setattr`, `getattr(obj, "name")`, pickling)
+  cannot be renamed consistently. Such patterns are the standard
+  limitation of identifier-renaming obfuscators.
+- **External references are the public contract**: names exported via
+  `__all__` and names used across files (imported or called from other
+  modules) are preserved, not obfuscated.
+- **C heuristic mode**: without `gcc`/`nm` on `PATH`, external symbol
+  detection falls back to a heuristic scanner that is conservative
+  (it may obfuscate less, never more than is safe).
+- **Obfuscation is not encryption**: embedded metadata and source
+  chunks allow full restoration by anyone with the tool. `--password`
+  adds obfuscation-grade protection of the embedded data, not
+  cryptographic security.
+
 ## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
