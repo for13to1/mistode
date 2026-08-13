@@ -62,16 +62,8 @@ class ImportAnalyzer:
     def is_imported_module(self, name: str) -> bool:
         return name in self.module_aliases
 
-    def get_module_name(self, alias: str) -> str | None:
-        return self.module_aliases.get(alias)
-
     def is_imported_name(self, name: str) -> bool:
         return name in self.imported_names
-
-    def is_module_attribute(self, module: str, attr: str) -> bool:
-        if module in self.module_attrs:
-            return attr in self.module_attrs[module]
-        return False
 
 
 class PythonObfuscator:
@@ -431,12 +423,6 @@ class PythonObfuscator:
         identifier_map[original] = obfuscated
 
         return obfuscated
-
-    def _generate_obfuscated_docstring(self, original_doc: str) -> str:
-        import hashlib
-
-        doc_hash = hashlib.sha256(original_doc.encode()).hexdigest()[:12]
-        return f"Obfuscated Docstring: {doc_hash}"
 
     def _get_mapping_info(self) -> dict:
         """

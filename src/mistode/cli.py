@@ -371,7 +371,7 @@ class ObfuscationService:
             f"Restored {options.input_file} -> {out_dir} ({len(files)} files)"
         )
 
-    def _detect_encoding(self, path: Path) -> str:
+    def _detect_encoding(self, path: Path) -> str:  # noqa: C901
         """
         Detect the file encoding by BOM and strict-decoding candidates.
 
@@ -396,6 +396,16 @@ class ObfuscationService:
         if raw.startswith(b"\xff\xfe"):
             return "utf-16-le"
         if raw.startswith(b"\xfe\xff"):
+            return "utf-16-be"
+
+        # UTF-16/32 without a BOM pairs ASCII bytes with NUL bytes, which
+        # would otherwise decode as valid (but wrong) UTF-8. Infer
+        # endianness from whether NUL bytes sit on odd or even positions.
+        if b"\x00" in raw:
+            nul_even = raw[0::2].count(0)
+            nul_odd = raw[1::2].count(0)
+            if nul_odd > nul_even:
+                return "utf-16-le"
             return "utf-16-be"
 
         for enc in ("utf-8", "gb18030", "big5", "shift_jis", "utf-16"):
