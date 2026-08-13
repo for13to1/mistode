@@ -147,6 +147,47 @@ class TestCEndToEnd:
         assert compile_result.returncode == 0, compile_result.stderr
 
 
+class TestNonUTF8:
+    """Non-UTF-8 encodings (CJK) must round-trip byte-identically."""
+
+    @pytest.mark.parametrize(
+        "encoding,decl",
+        [
+            ("gbk", "# -*- coding: gbk -*-"),
+            ("gbk", None),
+            ("big5", "# -*- coding: big5 -*-"),
+        ],
+    )
+    def test_cjk_roundtrip(self, tmp_path: Path, encoding: str, decl):
+        body = 'def greet(name):\n    return "你好, " + name\n'
+        content = (decl + "\n" if decl else "") + body + 'print(greet("世界"))\n'
+        src = tmp_path / "cjk.py"
+        src.write_bytes(content.encode(encoding))
+        obf = tmp_path / "cjk.obf.py"
+        res = tmp_path / "cjk.res.py"
+
+        assert run_cli("o", str(src), "--out", str(obf)).returncode == 0
+        # The obfuscated file is UTF-8 and must stay executable even when
+        # the source declared a legacy encoding
+        run = subprocess.run([sys.executable, str(obf)], capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr
+
+        assert run_cli("r", str(obf), "--out", str(res)).returncode == 0
+        assert res.read_bytes() == content.encode(encoding)
+
+    def test_utf8_bom_roundtrip(self, tmp_path: Path):
+        content = "# hello\nprint('hi')\n"
+        src = tmp_path / "bom.py"
+        src.write_bytes(b"\xef\xbb\xbf" + content.encode("utf-8"))
+        obf = tmp_path / "bom.obf.py"
+        res = tmp_path / "bom.res.py"
+
+        assert run_cli("o", str(src), "--out", str(obf)).returncode == 0
+        assert run_cli("r", str(obf), "--out", str(res)).returncode == 0
+        # BOM is preserved in the restored output
+        assert res.read_bytes() == b"\xef\xbb\xbf" + content.encode("utf-8")
+
+
 class TestCRLF:
     """CRLF (Windows) line endings must round-trip bit-perfectly."""
 

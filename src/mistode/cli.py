@@ -96,20 +96,27 @@ class ObfuscationService:
 
     def _obfuscate(self) -> None:
         options = self.options
-        content = self._read_file(options.input_file)
+        encoding = self._detect_encoding(options.input_file)
+        content = self._read_file(options.input_file, encoding)
 
         obfuscator: PythonObfuscator | CObfuscator
         if options.language == Language.PYTHON:
             obfuscator = PythonObfuscator(self.mm, self.gen, options.input_file.name)
             key_path = str(options.key_file) if options.key_file else None
             result = obfuscator.obfuscate(
-                content, key_path, encryption_key=options.password
+                content,
+                key_path,
+                encryption_key=options.password,
+                source_encoding=encoding,
             )
         else:
             obfuscator = CObfuscator(self.mm, self.gen, options.input_file.name)
-            result = obfuscator.obfuscate(content)
+            result = obfuscator.obfuscate(content, source_encoding=encoding)
 
         assert options.output_file is not None
+        # The obfuscated file is always written as UTF-8 so it stays
+        # executable/compilable; the original encoding is stored in the
+        # metadata for bit-perfect restoration.
         self._write_file(options.output_file, result)
         self._register_output_file(options.input_file.name, options.output_file.name)
 
@@ -130,7 +137,8 @@ class ObfuscationService:
 
     def _restore(self) -> None:
         options = self.options
-        content = self._read_file(options.input_file)
+        encoding = self._detect_encoding(options.input_file)
+        content = self._read_file(options.input_file, encoding)
 
         if options.key_file:
             self._load_mapping(options.key_file)
@@ -152,17 +160,56 @@ class ObfuscationService:
             raise ObfuscationError(str(e))
 
         assert options.output_file is not None
-        self._write_file(options.output_file, result)
+        # Restore in the original encoding (recorded in the embedded
+        # metadata) for byte-identical output.
+        restore_encoding = obfuscator.mm.source_encoding or encoding
+        self._write_file(options.output_file, result, restore_encoding)
         self._print_success(f"Restored {options.input_file} -> {options.output_file}")
         if options.key_file:
             self._print_success(f"Key used: {options.key_file}")
         else:
             self._print_success("Key used: Embedded metadata")
 
-    def _read_file(self, path: Path) -> str:
+    def _detect_encoding(self, path: Path) -> str:
+        """
+        Detect the file encoding by BOM and strict-decoding candidates.
+
+        Order matters: UTF-8 first (superset checks would otherwise accept
+        UTF-8 bytes as GB18030 and produce mojibake), then common CJK
+        encodings, then UTF-16, with latin-1 as a never-failing fallback.
+        """
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            raise FileNotFound(
+                f"❌ Error: Input file not found: {path}\n"
+                f"💡 Hint: Check if the file path is correct or use an absolute path"
+            )
+
+        if raw.startswith(b"\xef\xbb\xbf"):
+            return "utf-8-sig"
+        if raw.startswith(b"\xff\xfe\x00\x00"):
+            return "utf-32-le"
+        if raw.startswith(b"\x00\x00\xfe\xff"):
+            return "utf-32-be"
+        if raw.startswith(b"\xff\xfe"):
+            return "utf-16-le"
+        if raw.startswith(b"\xfe\xff"):
+            return "utf-16-be"
+
+        for enc in ("utf-8", "gb18030", "big5", "shift_jis", "utf-16"):
+            try:
+                raw.decode(enc)
+                return enc
+            except UnicodeDecodeError:
+                continue
+
+        return "latin-1"
+
+    def _read_file(self, path: Path, encoding: str = "utf-8") -> str:
         try:
             # newline="" keeps CRLF intact for bit-perfect restoration
-            with open(path, "r", encoding="utf-8", newline="") as f:
+            with open(path, "r", encoding=encoding, newline="") as f:
                 return f.read()
         except OSError:  # Catch file not found and other OS errors
             raise FileNotFound(
@@ -178,15 +225,18 @@ class ObfuscationService:
         except UnicodeDecodeError:
             raise FileNotFound(
                 f"❌ Error: File encoding issue: {path}\n"
-                f"💡 Hint: Ensure the file is a valid text file with UTF-8 encoding"
+                f"💡 Hint: Ensure the file is a valid text file (UTF-8, GBK, "  # noqa: E501
+                f"Big5, Shift_JIS, or UTF-16)"
             )
         except Exception as e:
             raise FileNotFound(f"❌ Error: Failed to read {path}\n💡 Details: {e}")
 
-    def _write_file(self, path: Path, content: str) -> None:
+    def _write_file(self, path: Path, content: str, encoding: str = "utf-8") -> None:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            # newline="" prevents newline translation on Windows
+            with open(path, "w", encoding=encoding, newline="") as f:
+                f.write(content)
         except PermissionError:
             raise ObfuscationError(
                 f"❌ Error: Permission denied when writing: {path}\n"

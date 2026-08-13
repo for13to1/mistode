@@ -352,13 +352,21 @@ class CObfuscator:
         Generate the embedded metadata comment containing the identifier
         mapping, so restoration works without a key file.
         """
-        mapping_info = {"identifier_mapping": self.mm.mapping}
+        mapping_info = {
+            "identifier_mapping": self.mm.mapping,
+            "source_encoding": self.mm.source_encoding,
+        }
         json_bytes = json.dumps(mapping_info).encode("utf-8")
         compressed = zlib.compress(json_bytes)
         encoded = base64.b64encode(compressed).decode("ascii")
         return f"/* @mistode:metadata:{encoded} */"
 
-    def obfuscate(self, source_code: str, embed_metadata: bool = True) -> str:  # noqa: C901
+    def obfuscate(  # noqa: C901
+        self,
+        source_code: str,
+        embed_metadata: bool = True,
+        source_encoding: str | None = None,
+    ) -> str:
         """
         Obfuscates C source code using layout engine approach.
 
@@ -366,7 +374,10 @@ class CObfuscator:
             source_code: Original C source code.
             embed_metadata: Whether to append the identifier mapping as an
                 embedded comment (enables key-file-free restoration).
+            source_encoding: Encoding of the original source file, stored
+                in the metadata so restoration is byte-identical.
         """
+        self.mm.source_encoding = source_encoding
         # Clear previous comments
         if self.filename in self.mm.comments:
             self.mm.comments[self.filename] = []
@@ -507,6 +518,8 @@ class CObfuscator:
                 if not self.mm.mapping:
                     self.mm.mapping = data.get("identifier_mapping", {})
                     self.mm.reverse_mapping = {v: k for k, v in self.mm.mapping.items()}
+                if data.get("source_encoding"):
+                    self.mm.source_encoding = data["source_encoding"]
                 metadata_found = True
             except Exception:
                 pass

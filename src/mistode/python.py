@@ -114,11 +114,14 @@ class PythonObfuscator:
         mapping_file: str | None = None,
         embed_metadata: bool = True,
         encryption_key: str | None = None,
+        source_encoding: str | None = None,
     ) -> str:
         # Initialize encryption manager if key is provided
         encryption_manager = (
             EncryptionManager(encryption_key) if encryption_key else None
         )
+
+        self.mm.source_encoding = source_encoding
 
         tree = ast.parse(source_code)
         self._cached_tree = tree
@@ -178,9 +181,10 @@ class PythonObfuscator:
             tokens = []
 
         class ReplacementCollector(ast.NodeVisitor):
-            def __init__(self, obfuscator, tokens):
+            def __init__(self, obfuscator, tokens, source_code):
                 self.obfuscator = obfuscator
                 self.tokens = tokens
+                self.lines = source_code.splitlines()
 
             def _should_obfuscate(self, name: str) -> bool:
                 return (
@@ -189,6 +193,19 @@ class PythonObfuscator:
                     and not self.obfuscator.import_analyzer.is_imported_name(name)
                     and not self.obfuscator.import_analyzer.is_imported_module(name)
                     and name not in self.obfuscator.preserved_keywords
+                )
+
+            def _char_col(self, lineno: int, byte_col: int) -> int:
+                """
+                Convert an AST column (a UTF-8 byte offset) to the character
+                offset used by tokenize, so multibyte characters (e.g. CJK)
+                don't shift replacement positions.
+                """
+                if lineno > len(self.lines):
+                    return byte_col
+                line = self.lines[lineno - 1]
+                return len(
+                    line.encode("utf-8")[:byte_col].decode("utf-8", errors="ignore")
                 )
 
             def _register_replacement(self, name: str, lineno: int, col_offset: int):
@@ -261,11 +278,19 @@ class PythonObfuscator:
 
                 for arg in node.args.args:
                     if self._should_obfuscate(arg.arg):
-                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+                        self._register_replacement(
+                            arg.arg,
+                            arg.lineno,
+                            self._char_col(arg.lineno, arg.col_offset),
+                        )
 
                 for arg in node.args.kwonlyargs:
                     if self._should_obfuscate(arg.arg):
-                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+                        self._register_replacement(
+                            arg.arg,
+                            arg.lineno,
+                            self._char_col(arg.lineno, arg.col_offset),
+                        )
 
                 if node.args.vararg and self._should_obfuscate(node.args.vararg.arg):
                     self._register_replacement(
@@ -295,11 +320,19 @@ class PythonObfuscator:
                 # Copying arg visiting logic since AsyncFunctionDef has same structure
                 for arg in node.args.args:
                     if self._should_obfuscate(arg.arg):
-                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+                        self._register_replacement(
+                            arg.arg,
+                            arg.lineno,
+                            self._char_col(arg.lineno, arg.col_offset),
+                        )
 
                 for arg in node.args.kwonlyargs:
                     if self._should_obfuscate(arg.arg):
-                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+                        self._register_replacement(
+                            arg.arg,
+                            arg.lineno,
+                            self._char_col(arg.lineno, arg.col_offset),
+                        )
 
                 if node.args.vararg and self._should_obfuscate(node.args.vararg.arg):
                     self._register_replacement(
@@ -330,27 +363,39 @@ class PythonObfuscator:
                 if isinstance(node.ctx, (ast.Store, ast.Load, ast.Del)):
                     if self._should_obfuscate(node.id):
                         self._register_replacement(
-                            node.id, node.lineno, node.col_offset
+                            node.id,
+                            node.lineno,
+                            self._char_col(node.lineno, node.col_offset),
                         )
 
             def visit_arg(self, node):
                 if self._should_obfuscate(node.arg):
-                    self._register_replacement(node.arg, node.lineno, node.col_offset)
+                    self._register_replacement(
+                        node.arg,
+                        node.lineno,
+                        self._char_col(node.lineno, node.col_offset),
+                    )
 
             def visit_Call(self, node):
                 for kw in node.keywords:
                     if kw.arg and self._should_obfuscate(kw.arg):
                         # kw.lineno/col_offset point to the argument name start
-                        self._register_replacement(kw.arg, kw.lineno, kw.col_offset)
+                        self._register_replacement(
+                            kw.arg, kw.lineno, self._char_col(kw.lineno, kw.col_offset)
+                        )
                 self.generic_visit(node)
 
             def visit_Lambda(self, node):
                 for arg in node.args.args:
                     if self._should_obfuscate(arg.arg):
-                        self._register_replacement(arg.arg, arg.lineno, arg.col_offset)
+                        self._register_replacement(
+                            arg.arg,
+                            arg.lineno,
+                            self._char_col(arg.lineno, arg.col_offset),
+                        )
                 self.generic_visit(node)
 
-        collector = ReplacementCollector(self, tokens)
+        collector = ReplacementCollector(self, tokens, source_code)
         collector.visit(tree)
         return replacements
 
@@ -384,6 +429,7 @@ class PythonObfuscator:
             "string_prefixes": self.mapping_records["string_prefixes"],
             "quote_types": self.mapping_records["quote_types"],
             "original_to_unparsed": self.mapping_records["original_to_unparsed"],
+            "source_encoding": self.mm.source_encoding,
         }
 
     def _generate_metadata_comment(
@@ -448,6 +494,9 @@ class PythonObfuscator:
             )
             if extracted:
                 mapping_info = extracted
+
+        if mapping_info.get("source_encoding"):
+            self.mm.source_encoding = mapping_info["source_encoding"]
 
         if obfuscated_code is None:
             if self._cached_tree is None:

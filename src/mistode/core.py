@@ -228,6 +228,7 @@ class MappingManager:
         self.file_mapping = {}
         self.encryption_key = None
         self.string_quote_types = {}
+        self.source_encoding = None
 
     def get_obfuscated_name(self, original, generator):
         if original in self.mapping:
@@ -278,6 +279,7 @@ class MappingManager:
             self.file_mapping = data.get("files", {})
             self.encryption_key = data.get("encryption_key", None)
             self.string_quote_types = data.get("string_quote_types", {})
+            self.source_encoding = data.get("source_encoding", None)
 
     def save_mapping(self, filepath):
         with open(filepath, "w") as f:
@@ -288,6 +290,7 @@ class MappingManager:
                     "files": self.file_mapping,
                     "encryption_key": self.encryption_key,
                     "string_quote_types": self.string_quote_types,
+                    "source_encoding": self.source_encoding,
                 },
                 f,
                 indent=2,
