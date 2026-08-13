@@ -161,7 +161,9 @@ class ObfuscationService:
 
     def _read_file(self, path: Path) -> str:
         try:
-            return path.read_text(encoding="utf-8")
+            # newline="" keeps CRLF intact for bit-perfect restoration
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                return f.read()
         except OSError:  # Catch file not found and other OS errors
             raise FileNotFound(
                 f"❌ Error: Input file not found: {path}\n"

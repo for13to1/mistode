@@ -150,6 +150,10 @@ class LayoutEngine:
             # Keep Structural Tokens
             layout_meta = {"p": pending_prefix}
             pending_prefix = ""
+            # Preserve the original newline text (e.g. `\r\n` on Windows)
+            # so restoration is bit-perfect even for CRLF files.
+            if token_type in (tokenize.NL, tokenize.NEWLINE):
+                layout_meta["nl"] = token_string
             kept_tokens.append((token_type, token_string, layout_meta))
 
         # Handle trailing layout
@@ -480,6 +484,9 @@ class LayoutEngine:
                 # If layout specifies content (e.g. restored docstring), use it
                 if "c" in meta:
                     content = meta["c"]
+                # Restore the original newline text (e.g. `\r\n` on Windows)
+                elif "nl" in meta:
+                    content = meta["nl"]
 
                 result_parts.append(content)
 

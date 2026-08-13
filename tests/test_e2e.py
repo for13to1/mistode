@@ -145,3 +145,46 @@ class TestCEndToEnd:
             text=True,
         )
         assert compile_result.returncode == 0, compile_result.stderr
+
+
+class TestCRLF:
+    """CRLF (Windows) line endings must round-trip bit-perfectly."""
+
+    def test_python_crlf_roundtrip(self, tmp_path: Path):
+        content = "def foo():\r\n    return 1\r\n"
+        src = tmp_path / "crlf.py"
+        src.write_bytes(content.encode("utf-8"))
+        obf = tmp_path / "crlf.obf.py"
+        res = tmp_path / "crlf.res.py"
+
+        assert run_cli("o", str(src), "--out", str(obf)).returncode == 0
+        assert run_cli("r", str(obf), "--out", str(res)).returncode == 0
+
+        assert res.read_bytes() == content.encode("utf-8")
+
+    def test_c_crlf_roundtrip(self, tmp_path: Path):
+        content = "int main() {\r\n    return 0;\r\n}\r\n"
+        src = tmp_path / "crlf.c"
+        src.write_bytes(content.encode("utf-8"))
+        obf = tmp_path / "crlf.obf.c"
+        res = tmp_path / "crlf.res.c"
+
+        assert run_cli("o", str(src), "--out", str(obf)).returncode == 0
+        assert run_cli("r", str(obf), "--out", str(res)).returncode == 0
+
+        assert res.read_bytes() == content.encode("utf-8")
+
+    def test_c_file_without_obfuscatable_identifiers(self, tmp_path: Path):
+        """A C file with only reserved identifiers has an empty mapping,
+        which is valid and must still restore (regression for the empty-map
+        guard raising spuriously)."""
+        content = "int main() {\r\n    return 0;\r\n}\r\n"
+        src = tmp_path / "simple.c"
+        src.write_text(content, encoding="utf-8")
+        obf = tmp_path / "simple.obf.c"
+        res = tmp_path / "simple.res.c"
+
+        assert run_cli("o", str(src), "--out", str(obf)).returncode == 0
+        assert run_cli("r", str(obf), "--out", str(res)).returncode == 0
+
+        assert res.read_bytes() == content.encode("utf-8")

@@ -494,6 +494,7 @@ class CObfuscator:
         Restores C source code using layout chunks.
         """
         # Extract external metadata for mapping if present
+        metadata_found = False
         metadata_match = re.search(
             r"/\* @mistode:metadata:(.*?) \*/", source_code, re.DOTALL
         )
@@ -506,6 +507,7 @@ class CObfuscator:
                 if not self.mm.mapping:
                     self.mm.mapping = data.get("identifier_mapping", {})
                     self.mm.reverse_mapping = {v: k for k, v in self.mm.mapping.items()}
+                metadata_found = True
             except Exception:
                 pass
 
@@ -522,7 +524,10 @@ class CObfuscator:
 
         pending_layouts = []
 
-        if not self.mm.mapping and not self.mm.reverse_mapping:
+        # Fail loudly only when there is genuinely no mapping source:
+        # a valid (possibly empty) mapping from embedded metadata is fine,
+        # since a file with no obfuscatable identifiers has nothing to map.
+        if not metadata_found and not self.mm.mapping and not self.mm.reverse_mapping:
             raise ValueError(
                 "No identifier mapping available for restoration. "
                 "The obfuscated file has no embedded metadata and no key file "
