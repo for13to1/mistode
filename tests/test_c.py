@@ -662,3 +662,41 @@ int main() {
     # classified as defined (internal) symbols, not external ones.
     for name in ("p", "q", "count", "msg"):
         assert name not in externals
+
+
+def test_c_obfuscator_heuristic_fallback_without_gcc(monkeypatch):
+    """
+    Regression: when gcc/nm are unavailable, external symbol detection must
+    fall back to the heuristic scanner instead of crashing or obfuscating
+    external symbols.
+    """
+    code = """
+#include <stdio.h>
+
+int my_func(int a) {
+    return a * 2;
+}
+
+int main() {
+    printf("%d", my_func(10));
+    return 0;
+}
+"""
+
+    from src.mistode import c
+    from src.mistode.core import MappingManager, NameGenerator
+
+    # Force the heuristic path by pretending gcc/nm are not available
+    monkeypatch.setattr(c.shutil, "which", lambda _name: None)
+
+    mm = MappingManager()
+    gen = NameGenerator()
+    obfuscator = c.CObfuscator(mm, gen)
+    obfuscated = obfuscator.obfuscate(code)
+
+    # printf is external (from stdio) and must be preserved
+    assert "printf" in obfuscated
+    # main is reserved and preserved
+    assert "main" in obfuscated
+    # my_func is defined and should be obfuscated
+    assert "my_func" not in obfuscated

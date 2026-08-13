@@ -244,6 +244,50 @@ class TestArgumentParser:
         parser = ArgumentParser()
         assert parser.parser is not None
 
+    def test_load_config_from_pyproject(self, tmp_path, monkeypatch):
+        """
+        Config defaults in [tool.mistode] are loaded from pyproject.toml.
+        """
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mistode]\nstyle = "random"\nlength = 20\nseed = 42\nstats = true\n',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        parser = ArgumentParser()
+        options = parser.parse(["o", "test.py"])
+        assert options.style == "random"
+        assert options.length == 20
+        assert options.seed == 42
+        assert options.stats is True
+
+    def test_cli_overrides_config(self, tmp_path, monkeypatch):
+        """Command-line flags take precedence over pyproject.toml config."""
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.mistode]\nstyle = "random"\nlength = 20\n',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        parser = ArgumentParser()
+        options = parser.parse(["o", "test.py", "--style", "similar", "--length", "16"])
+        assert options.style == "similar"
+        assert options.length == 16
+
+    def test_invalid_pyproject_is_ignored(self, tmp_path, monkeypatch):
+        """A malformed pyproject.toml must not crash config loading."""
+        (tmp_path / "pyproject.toml").write_text(
+            "not valid toml [[[",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        parser = ArgumentParser()
+        # Falls back to defaults without raising
+        options = parser.parse(["o", "test.py"])
+        assert options.style == "similar"
+        assert options.length == 16
+
     def test_parse_obfuscate_command(self):
         """
         Test parsing obfuscate command

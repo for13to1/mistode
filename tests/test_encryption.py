@@ -116,3 +116,29 @@ def      spaced(   arg1   ):
 
         assert "def      spaced(   arg1   ):" in restored
         assert "   +   1" in restored
+
+
+class TestEncryptionValidation:
+    """Input validation and error paths for EncryptionManager."""
+
+    def test_empty_key_rejected(self):
+        with pytest.raises(ValueError):
+            EncryptionManager("")
+
+    def test_non_string_key_rejected(self):
+        with pytest.raises(TypeError):
+            EncryptionManager(123)  # type: ignore[arg-type]
+
+    def test_overlong_key_rejected(self):
+        with pytest.raises(ValueError):
+            EncryptionManager("a" * 1025)
+
+    def test_invalid_base64_rejected(self):
+        manager = EncryptionManager("key")
+        with pytest.raises(ValueError):
+            manager.decrypt("not-valid-base64!!!")
+
+    def test_bytes_input_encrypt(self):
+        manager = EncryptionManager("key")
+        encrypted = manager.encrypt(b"raw bytes")
+        assert manager.decrypt(encrypted) == b"raw bytes"
