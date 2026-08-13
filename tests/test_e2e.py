@@ -506,3 +506,52 @@ class TestCRLF:
         assert run_cli("r", str(obf), "--out", str(res)).returncode == 0
 
         assert res.read_bytes() == content.encode("utf-8")
+
+
+class TestSelfHost:
+    """
+    Dogfooding: mistode must obfuscate itself, the obfuscated copy must
+    still work, and it must restore its own source byte-identically.
+    This caught class-member/method-name/keyword-parameter obfuscation
+    bugs that simple fixture tests could not.
+    """
+
+    def test_self_host_roundtrip(self, tmp_path: Path):
+        project_root = Path(__file__).resolve().parent.parent
+        src_dir = project_root / "src"
+        obf_dir = tmp_path / "self.obf"
+        res_dir = tmp_path / "self.res"
+
+        # 1. Obfuscate the project's own source
+        result = run_cli("o", str(src_dir), "--out", str(obf_dir))
+        assert result.returncode == 0, result.stderr
+
+        # 2. The obfuscated copy must still work: use it to obfuscate a file
+        target = tmp_path / "target.py"
+        target.write_text("def secret(x):\n    return x * 2\nprint(secret(21))\n")
+        target_obf = tmp_path / "target.obf.py"
+        run = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "mistode",
+                "o",
+                str(target),
+                "--out",
+                str(target_obf),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            env={**__import__("os").environ, "PYTHONPATH": str(obf_dir)},
+        )
+        assert run.returncode == 0, run.stderr
+
+        # 3. And restore its own source byte-identically
+        result = run_cli("r", str(obf_dir), "--out", str(res_dir))
+        assert result.returncode == 0, result.stderr
+
+        for rel in sorted(p.relative_to(src_dir) for p in src_dir.rglob("*.py")):
+            original = (src_dir / rel).read_bytes()
+            restored = (res_dir / rel).read_bytes()
+            assert restored == original, f"mismatch in {rel}"

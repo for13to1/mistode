@@ -247,6 +247,29 @@ class ObfuscationService:
                             imported.add(alias.name)
         return imported
 
+    def _collect_cross_file_keywords(self, files: list[Path]) -> set[str]:
+        """
+        Python project mode: argument names passed as keyword arguments
+        anywhere in the project. A function's parameter may be referenced
+        as a keyword in a *different* file, so every such name must keep
+        its original spelling across all files.
+        """
+        keywords: set[str] = set()
+        for f in files:
+            if self._language_for_file(f) != Language.PYTHON:
+                continue
+            try:
+                encoding = self._detect_encoding(f)
+                tree = ast.parse(self._read_file(f, encoding))
+            except OSError, UnicodeDecodeError, SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    for kw in node.keywords:
+                        if kw.arg:
+                            keywords.add(kw.arg)
+        return keywords
+
     def _collect_cross_file_symbols(self, files: list[Path]) -> set[str]:
         """
         C project mode: identifiers *defined* in one file and appearing in
@@ -299,6 +322,7 @@ class ObfuscationService:
 
         # Cross-file analysis so references between files stay intact
         python_imports = self._collect_cross_file_imports(files)
+        python_keywords = self._collect_cross_file_keywords(files)
         c_shared = self._collect_cross_file_symbols(files)
 
         for f in files:
@@ -309,8 +333,10 @@ class ObfuscationService:
 
             if self._language_for_file(f) == Language.PYTHON:
                 obfuscator = PythonObfuscator(self.mm, self.gen, f.name)
-                # Names imported elsewhere in the project must not change
+                # Names imported elsewhere / used as keywords elsewhere in
+                # the project must not change
                 obfuscator.ignore_set.update(python_imports)
+                obfuscator.preserved_keywords.update(python_keywords)
                 try:
                     result = obfuscator.obfuscate(
                         content,

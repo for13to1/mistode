@@ -362,6 +362,25 @@ class PythonObfuscator:
                 self.generic_visit(node)
 
             def visit_ClassDef(self, node):
+                # Class-level names (class variables, constants, enum
+                # members, method names, nested classes) are referenced
+                # via `Class.attr` / `obj.attr`, and attribute names are
+                # never obfuscated. So these bound names must stay original
+                # too, or attribute lookups break.
+                for stmt in node.body:
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if isinstance(target, ast.Name):
+                                self.obfuscator.ignore_set.add(target.id)
+                    elif isinstance(stmt, ast.AnnAssign) and isinstance(
+                        stmt.target, ast.Name
+                    ):
+                        self.obfuscator.ignore_set.add(stmt.target.id)
+                    elif isinstance(
+                        stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                    ):
+                        self.obfuscator.ignore_set.add(stmt.name)
+
                 if self._should_obfuscate(node.name):
                     loc = self._find_def_name_location(
                         node.lineno, node.name, is_class=True
