@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 # Import test module
-from src.mistode.core import MappingManager, NameGenerator, StringEncryptor
+from src.mistode.core import MappingManager, NameGenerator
 
 
 class TestNameGenerator:
@@ -213,41 +213,6 @@ class TestMappingManager:
         # Test getting original name
         assert mm.get_original_name("obfuscated_name") == "original_name"
         assert mm.get_original_name("unknown") == "unknown"
-
-
-class TestStringEncryptor:
-    """
-    StringEncryptor Test Class
-    """
-
-    def test_encryptor_initialization(self):
-        """
-        Test encryptor initialization
-        """
-        enc = StringEncryptor()
-        assert 1 <= enc.key <= 255
-
-        enc2 = StringEncryptor(key=42)
-        assert enc2.key == 42
-
-    def test_encryption_decryption(self):
-        """
-        Test encryption and decryption
-        """
-        enc = StringEncryptor(key=42)
-        original = "Hello, World! Testing Chinese characters"
-        encrypted = enc.encrypt(original)
-        decrypted = enc.decrypt(encrypted)
-
-        assert original == decrypted
-        assert encrypted != original
-
-    def test_encryptor_get_key(self):
-        """
-        Test get key
-        """
-        enc = StringEncryptor(key=123)
-        assert enc.get_key() == 123
 
 
 class TestNameGeneratorEdgeCases:

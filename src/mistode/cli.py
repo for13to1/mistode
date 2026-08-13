@@ -99,8 +99,6 @@ class ObfuscationService:
         options = self.options
         content = self._read_file(options.input_file)
 
-        assert options.key_file is not None or options.command == Command.OBFUSCATE
-
         obfuscator: Union[PythonObfuscator, CObfuscator]
         if options.language == Language.PYTHON:
             obfuscator = PythonObfuscator(self.mm, self.gen, options.input_file.name)

@@ -483,7 +483,7 @@ class LayoutEngine:
 
                 result_parts.append(content)
 
-        except (StopIteration, tokenize.TokenError):
+        except StopIteration, tokenize.TokenError:
             pass
 
         return "".join(result_parts)

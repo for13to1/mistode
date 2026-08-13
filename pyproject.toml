@@ -50,7 +50,7 @@ addopts = "-v --tb=short"
 
 [tool.ruff]
 line-length = 88
-target-version = "py38"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "C90"]

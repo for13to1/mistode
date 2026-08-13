@@ -354,56 +354,6 @@ class PythonObfuscator:
         collector.visit(tree)
         return replacements
 
-    def _should_preserve_attribute(self, node: ast.Attribute) -> bool:
-        base = node.value
-
-        if isinstance(base, ast.Constant):
-            return True
-
-        builtin_methods = {
-            "strip",
-            "upper",
-            "lower",
-            "replace",
-            "split",
-            "join",
-            "find",
-            "format",
-            "encode",
-            "decode",
-            "append",
-            "extend",
-            "pop",
-            "remove",
-            "insert",
-            "sort",
-            "reverse",
-            "keys",
-            "values",
-            "items",
-            "get",
-            "update",
-            "copy",
-            "clear",
-            "startswith",
-            "endswith",
-            "count",
-            "index",
-            "isalnum",
-            "isalpha",
-            "isdigit",
-            "islower",
-            "isupper",
-        }
-        if node.attr in builtin_methods:
-            return True
-
-        if isinstance(base, ast.Name):
-            if self.import_analyzer.is_imported_name(base.id):
-                return True
-
-        return False
-
     def _generate_obfuscated_name(self, original: str) -> str:
         identifier_map: Dict[str, str] = cast(
             Dict[str, str], self.mapping_records["identifier_mapping"]

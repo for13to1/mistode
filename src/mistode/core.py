@@ -13,7 +13,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import base64
 import json
 import random
 
@@ -188,8 +187,6 @@ class NameGenerator:
             raise TypeError("Length must be an integer")
         if length < 8 or length > 32:
             raise ValueError(f"Length must be between 8 and 32, current: {length}")
-        if length < 1 or length > 255:  # Additional check for extreme values
-            raise ValueError(f"Length must be between 1 and 255, current: {length}")
         self.length = length
 
     def set_style(self, style: str):
@@ -304,29 +301,3 @@ class MappingManager:
 
     def get_original_name(self, obfuscated):
         return self.reverse_mapping.get(obfuscated, obfuscated)
-
-
-class StringEncryptor:
-    def __init__(self, key=None):
-        if key is None:
-            # Generate random key between 1-255
-            self.key = random.randint(1, 255)
-        else:
-            # Validate the key is an integer between 1 and 255
-            if not isinstance(key, int):
-                raise TypeError("Key must be an integer")
-            if key < 1 or key > 255:
-                raise ValueError("Key must be between 1 and 255")
-            self.key = key
-
-    def encrypt(self, text):
-        return base64.b64encode(
-            bytes(c ^ self.key for c in text.encode("utf-8"))
-        ).decode("utf-8")
-
-    def decrypt(self, encrypted_text):
-        decoded = base64.b64decode(encrypted_text)
-        return bytes(c ^ self.key for c in decoded).decode("utf-8")
-
-    def get_key(self):
-        return self.key
