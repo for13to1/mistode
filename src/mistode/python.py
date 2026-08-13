@@ -131,6 +131,7 @@ class PythonObfuscator:
         # Collect all keyword arguments used in calls to prevent obfuscating
         # external APIs
         self._collect_preserved_keywords(tree)
+        self._collect_all_exports(tree)
 
         # Collect replacements for identifiers based on AST analysis
         replacements = self._collect_replacements(tree, source_code)
@@ -163,6 +164,24 @@ class PythonObfuscator:
                 for kw in node.keywords:
                     if kw.arg:
                         self.preserved_keywords.add(kw.arg)
+
+    def _collect_all_exports(self, tree: ast.AST) -> None:
+        """
+        Collect names declared in module-level `__all__` lists.
+
+        These are the module's public contract and must keep their original
+        names so `from module import *` (and external imports) keep working.
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "__all__":
+                        if isinstance(node.value, (ast.List, ast.Tuple)):
+                            for elt in node.value.elts:
+                                if isinstance(elt, ast.Constant) and isinstance(
+                                    elt.value, str
+                                ):
+                                    self.ignore_set.add(elt.value)
 
     def _collect_replacements(  # noqa: C901
         self, tree: ast.AST, source_code: str

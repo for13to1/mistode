@@ -458,6 +458,28 @@ def process_status(status):
         assert "match " in obfuscated
         assert "case " in obfuscated
 
+    def test_all_exports_preserved(self, obfuscator):
+        """
+        Names declared in `__all__` are the module's public contract and
+        must not be obfuscated, so `from module import *` keeps working.
+        """
+        source_code = """
+def public_api():
+    return 42
+
+__all__ = ["public_api"]
+"""
+        obfuscated = obfuscator.obfuscate(source_code)
+
+        assert "__all__" in obfuscated
+        assert "public_api" in obfuscated
+
+        # The obfuscated module must still support star-import of the export
+        ns = {}
+        exec(compile(obfuscated, "<obf>", "exec"), ns)
+        assert ns["__all__"] == ["public_api"]
+        assert "public_api" in ns
+
     def test_keyword_argument_execution(self, obfuscator):
         """
         Test keyword argument execution
