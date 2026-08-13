@@ -147,6 +147,76 @@ class TestCEndToEnd:
         assert compile_result.returncode == 0, compile_result.stderr
 
 
+class TestEncryption:
+    """--password encryption round-trip via the real CLI."""
+
+    def test_password_roundtrip(self, tmp_path: Path):
+        src = tmp_path / "app.py"
+        src.write_text(PYTHON_SRC, encoding="utf-8")
+        obf = tmp_path / "app.obf.py"
+        res = tmp_path / "app.res.py"
+
+        result = run_cli("o", str(src), "--out", str(obf), "--password", "s3cret")
+        assert result.returncode == 0, result.stderr
+        # Chunks must be encrypted, not plain
+        assert "#@mistode:secure_chunk:" in obf.read_text(encoding="utf-8")
+
+        result = run_cli("r", str(obf), "--out", str(res), "--password", "s3cret")
+        assert result.returncode == 0, result.stderr
+        assert res.read_text(encoding="utf-8") == PYTHON_SRC
+
+    def test_wrong_password_fails(self, tmp_path: Path):
+        src = tmp_path / "app.py"
+        src.write_text(PYTHON_SRC, encoding="utf-8")
+        obf = tmp_path / "app.obf.py"
+
+        result = run_cli("o", str(src), "--out", str(obf), "--password", "right")
+        assert result.returncode == 0, result.stderr
+
+        result = run_cli(
+            "r", str(obf), "--out", str(tmp_path / "r.py"), "--password", "wrong"
+        )
+        assert result.returncode != 0
+        assert "mapping" in (result.stdout + result.stderr).lower()
+
+    def test_missing_password_fails(self, tmp_path: Path):
+        src = tmp_path / "app.py"
+        src.write_text(PYTHON_SRC, encoding="utf-8")
+        obf = tmp_path / "app.obf.py"
+
+        result = run_cli("o", str(src), "--out", str(obf), "--password", "right")
+        assert result.returncode == 0, result.stderr
+
+        result = run_cli("r", str(obf), "--out", str(tmp_path / "r.py"))
+        assert result.returncode != 0
+
+
+class TestSeed:
+    """--seed determinism via the real CLI."""
+
+    def test_same_seed_deterministic(self, tmp_path: Path):
+        src = tmp_path / "app.py"
+        src.write_text(PYTHON_SRC, encoding="utf-8")
+
+        run_cli("o", str(src), "--out", str(tmp_path / "a.obf.py"), "--seed", "42")
+        run_cli("o", str(src), "--out", str(tmp_path / "b.obf.py"), "--seed", "42")
+
+        a = (tmp_path / "a.obf.py").read_text(encoding="utf-8")
+        b = (tmp_path / "b.obf.py").read_text(encoding="utf-8")
+        assert a == b
+
+    def test_different_seed_differs(self, tmp_path: Path):
+        src = tmp_path / "app.py"
+        src.write_text(PYTHON_SRC, encoding="utf-8")
+
+        run_cli("o", str(src), "--out", str(tmp_path / "a.obf.py"), "--seed", "42")
+        run_cli("o", str(src), "--out", str(tmp_path / "b.obf.py"), "--seed", "43")
+
+        a = (tmp_path / "a.obf.py").read_text(encoding="utf-8")
+        b = (tmp_path / "b.obf.py").read_text(encoding="utf-8")
+        assert a != b
+
+
 class TestNonUTF8:
     """Non-UTF-8 encodings (CJK) must round-trip byte-identically."""
 
