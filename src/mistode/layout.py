@@ -177,6 +177,7 @@ class LayoutEngine:
         fstring_depth = 0
         FSTRING_START = tokenize.FSTRING_START
         FSTRING_END = tokenize.FSTRING_END
+        FSTRING_MIDDLE = tokenize.FSTRING_MIDDLE
 
         for idx, (ttype, tstring, layout_meta) in enumerate(kept_tokens):
             if ttype == tokenize.ENDMARKER:
@@ -226,10 +227,9 @@ class LayoutEngine:
             # Determine if we need space before this token
             prefix_space = ""
 
-            # Check F-String state to prevent spacing inside strings
+            # Track f-string nesting so we can apply f-string-specific
+            # spacing rules to expressions inside the braces.
             in_fstring = fstring_depth > 0
-
-            # Update depth
             if ttype == FSTRING_START:
                 fstring_depth += 1
             elif ttype == FSTRING_END:
@@ -240,16 +240,22 @@ class LayoutEngine:
                     prefix_space = indents[-1]
                 at_line_start = False
             else:
-                # Minimal spacing logic
                 if current_line_tokens:
                     prev_str = current_line_tokens[-1]
-                    # Only apply spacing logic if NOT inside an f-string
-                    if not in_fstring:
-                        # But wait, FSTRING_START itself needs space?
-                        # in_fstring uses state BEFORE update.
-                        # So FSTRING_START (depth=0) gets space. Correct.
-                        if self._needs_space(prev_str, tstring, ttype):
+                    prev_clean = prev_str.strip()
+                    if in_fstring:
+                        # Inside an f-string: syntax characters and text
+                        # segments must stay compact (`{x!r:>10}`), but
+                        # expressions need normal spacing (`if last else`).
+                        compact = (
+                            ttype in (FSTRING_MIDDLE, FSTRING_END)
+                            or tstring in ("{", "}")
+                            or prev_clean in ("{", "!", ":")
+                        )
+                        if not compact and self._needs_space(prev_str, tstring, ttype):
                             prefix_space = " "
+                    elif self._needs_space(prev_str, tstring, ttype):
+                        prefix_space = " "
 
             current_line_tokens.append(prefix_space + tstring)
 

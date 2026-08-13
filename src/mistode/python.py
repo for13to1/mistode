@@ -50,11 +50,15 @@ class ImportAnalyzer:
                     orig_name = alias.name
                     asname = alias.asname or alias.name
                     self.module_aliases[asname] = orig_name
+                    # `import X.Y` also binds the top-level name X,
+                    # referenced as `X.Y.attr` in the source
+                    top = orig_name.split(".")[0]
+                    self.module_aliases[top] = top
             elif isinstance(node, ast.ImportFrom):
-                if node.module:
-                    for alias in node.names:
-                        name = alias.asname or alias.name
-                        self.imported_names.add(name)
+                for alias in node.names:
+                    name = alias.asname or alias.name
+                    self.imported_names.add(name)
+                    if node.module:
                         if node.module not in self.module_attrs:
                             self.module_attrs[node.module] = set()
                         self.module_attrs[node.module].add(alias.name)
@@ -156,6 +160,12 @@ class PythonObfuscator:
                 for kw in node.keywords:
                     if kw.arg:
                         self.preserved_keywords.add(kw.arg)
+            # nonlocal/global declarations reference names across scopes;
+            # obfuscating them risks mismatches (the declaration node is
+            # not a Name, so it is never renamed consistently)
+            elif isinstance(node, (ast.Nonlocal, ast.Global)):
+                for name in node.names:
+                    self.ignore_set.add(name)
 
     def _collect_all_exports(self, tree: ast.AST) -> None:
         """

@@ -53,6 +53,18 @@ class TestLayoutEdgeCases:
         assert restored == source
         assert _result(obfuscated) == _result(source)
 
+    def test_fstring_conversion_and_conditional_expression(self):
+        """Regression: f-string syntax chars ({ ! : }) and text stay compact,
+        while conditional expressions inside braces keep normal spacing."""
+        source = (
+            "def fmt(x, last):\n"
+            "    return f\"{x!r:>10} {'\u2514\u2500\u2500 ' if last else '\u251c\u2500\u2500 '}\"\n"
+            "_result = fmt(5, True)\n"
+        )
+        obfuscated, restored = _roundtrip(source)
+        assert restored == source
+        assert _result(obfuscated) == _result(source)
+
     def test_hash_inside_string_is_not_comment(self):
         source = 's = "# not a comment"\nt = "a#b"\n_result = (s, t)\n'
         obfuscated, restored = _roundtrip(source)

@@ -225,11 +225,49 @@ class ObfuscationService:
     def _language_for_file(self, path: Path) -> Language:
         return Language.PYTHON if path.suffix.lower() == ".py" else Language.C
 
+    def _collect_module_level_names(self, tree: ast.AST) -> set[str]:  # noqa: C901
+        """Collect definitions in module scope, including those nested in
+        `if`/`try`/`with` blocks (still module scope), but not inside
+        function or class bodies."""
+        names: set[str] = set()
+
+        def visit(stmts):
+            for stmt in stmts:
+                if isinstance(
+                    stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    names.add(stmt.name)
+                elif isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            names.add(target.id)
+                elif isinstance(stmt, ast.AnnAssign) and isinstance(
+                    stmt.target, ast.Name
+                ):
+                    names.add(stmt.target.id)
+                elif isinstance(
+                    stmt,
+                    (ast.If, ast.For, ast.While, ast.With, ast.AsyncFor, ast.AsyncWith),
+                ):
+                    visit(stmt.body)
+                    visit(stmt.orelse)
+                elif isinstance(stmt, ast.Try):
+                    visit(stmt.body)
+                    for handler in stmt.handlers:
+                        visit(handler.body)
+                    visit(stmt.orelse)
+                    visit(stmt.finalbody)
+
+        visit(tree.body)
+        return names
+
     def _collect_cross_file_imports(self, files: list[Path]) -> set[str]:
         """
-        Python project mode: names imported via `from X import name`
-        anywhere in the project. These must keep their original names in
-        every file so cross-module references survive.
+        Python project mode: names imported via `from X import name`,
+        plus every module-level definition name. Module-level names are
+        the module's public surface and can be reached via `from X import
+        name`, `from X import *`, or `module.attr` - all of which are never
+        renamed - so they must keep their original spelling everywhere.
         """
         imported: set[str] = set()
         for f in files:
@@ -243,8 +281,14 @@ class ObfuscationService:
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom):
                     for alias in node.names:
-                        if alias.name != "*":
+                        if alias.name == "*":
+                            # `from .mod import *` also binds the module
+                            # name itself (e.g. `mod.__all__`)
+                            if node.module:
+                                imported.add(node.module.split(".")[-1])
+                        else:
                             imported.add(alias.name)
+            imported |= self._collect_module_level_names(tree)
         return imported
 
     def _collect_cross_file_keywords(self, files: list[Path]) -> set[str]:
@@ -269,6 +313,26 @@ class ObfuscationService:
                         if kw.arg:
                             keywords.add(kw.arg)
         return keywords
+
+    def _collect_cross_file_attributes(self, files: list[Path]) -> set[str]:
+        """
+        Python project mode: attribute names accessed as `X.attr` anywhere.
+        Since attribute access is never renamed, any definition reachable
+        via `module.attr` must keep its original name in every file.
+        """
+        attrs: set[str] = set()
+        for f in files:
+            if self._language_for_file(f) != Language.PYTHON:
+                continue
+            try:
+                encoding = self._detect_encoding(f)
+                tree = ast.parse(self._read_file(f, encoding))
+            except OSError, UnicodeDecodeError, SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                    attrs.add(node.attr)
+        return attrs
 
     def _collect_cross_file_symbols(self, files: list[Path]) -> set[str]:
         """
@@ -323,6 +387,7 @@ class ObfuscationService:
         # Cross-file analysis so references between files stay intact
         python_imports = self._collect_cross_file_imports(files)
         python_keywords = self._collect_cross_file_keywords(files)
+        python_attrs = self._collect_cross_file_attributes(files)
         c_shared = self._collect_cross_file_symbols(files)
 
         for f in files:
@@ -333,9 +398,10 @@ class ObfuscationService:
 
             if self._language_for_file(f) == Language.PYTHON:
                 obfuscator = PythonObfuscator(self.mm, self.gen, f.name)
-                # Names imported elsewhere / used as keywords elsewhere in
-                # the project must not change
+                # Names imported elsewhere / used as keywords / accessed
+                # as attributes elsewhere in the project must not change
                 obfuscator.ignore_set.update(python_imports)
+                obfuscator.ignore_set.update(python_attrs)
                 obfuscator.preserved_keywords.update(python_keywords)
                 try:
                     result = obfuscator.obfuscate(
