@@ -21,7 +21,7 @@ from .c import CObfuscator
 from .core import MappingManager, NameGenerator
 from .python import PythonObfuscator
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 __all__ = [
     "PythonObfuscator",
     "CObfuscator",
