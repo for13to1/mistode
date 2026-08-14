@@ -388,6 +388,58 @@ class ObfuscationService:
             base += module.split(".")
         return ".".join(base)
 
+    def _collect_obfuscatable_methods(self, files: list[Path]) -> set[str]:  # noqa: C901
+        """
+        Python project mode: class method names that may be renamed.
+
+        A method is only safe to rename if every `X.method` attribute
+        access across the project has a known receiver: `self` (inside
+        the class) or the class name itself. Any access on a variable of
+        unknown type blocks the method.
+        """
+        class_methods: dict[str, set[str]] = {}
+        trees: list[ast.AST] = []
+        for f in files:
+            if self._language_for_file(f) != Language.PYTHON:
+                continue
+            try:
+                encoding = self._detect_encoding(f)
+                tree = ast.parse(self._read_file(f, encoding))
+            except OSError, UnicodeDecodeError, SyntaxError:
+                continue
+            trees.append(tree)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    methods = {
+                        stmt.name
+                        for stmt in node.body
+                        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    }
+                    if methods:
+                        class_methods[node.name] = methods
+
+        blocked: set[str] = set()
+        for tree in trees:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute):
+                    receiver = node.value
+                    # Safe receivers: `self` or a known class name directly
+                    safe = isinstance(receiver, ast.Name) and (
+                        receiver.id == "self" or receiver.id in class_methods
+                    )
+                    if safe:
+                        continue
+                    # Anything else - including chained receivers such as
+                    # `self.parser.add_argument` - is an unknown object
+                    for methods in class_methods.values():
+                        if node.attr in methods:
+                            blocked.add(node.attr)
+
+        all_methods: set[str] = set()
+        for methods in class_methods.values():
+            all_methods |= methods
+        return all_methods - blocked
+
     def _collect_cross_file_keywords(self, files: list[Path]) -> set[str]:
         """
         Python project mode: argument names passed as keyword arguments
@@ -485,6 +537,7 @@ class ObfuscationService:
         python_imports = self._collect_cross_file_imports(files)
         python_keywords = self._collect_cross_file_keywords(files)
         python_attrs = self._collect_cross_file_attributes(files)
+        python_methods = self._collect_obfuscatable_methods(files)
         c_shared = self._collect_cross_file_symbols(files)
 
         for f in files:
@@ -494,11 +547,19 @@ class ObfuscationService:
             content = self._read_file(f, encoding)
 
             if self._language_for_file(f) == Language.PYTHON:
-                obfuscator = PythonObfuscator(self.mm, self.gen, f.name)
+                obfuscator = PythonObfuscator(
+                    self.mm,
+                    self.gen,
+                    f.name,
+                    obfuscatable_methods=python_methods,
+                )
                 # Names imported elsewhere / used as keywords / accessed
-                # as attributes elsewhere in the project must not change
+                # as attributes elsewhere in the project must not change.
+                # Methods proven obfuscatable are exempt from the attribute
+                # preservation (their self/class call sites are renamed in
+                # tandem).
                 obfuscator.ignore_set.update(python_imports)
-                obfuscator.ignore_set.update(python_attrs)
+                obfuscator.ignore_set.update(python_attrs - python_methods)
                 obfuscator.preserved_keywords.update(python_keywords)
                 try:
                     result = obfuscator.obfuscate(

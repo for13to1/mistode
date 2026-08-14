@@ -81,10 +81,18 @@ class PythonObfuscator:
         mapping_manager: MappingManager,
         generator: NameGenerator,
         filename: str = "unknown",
+        obfuscatable_methods: set[str] | None = None,
     ):
         self.mm = mapping_manager
         self.gen = generator
         self.filename = filename
+
+        # Class method names that may be renamed (project mode decision):
+        # their definitions and `self.method` / `ClassName.method` call
+        # sites are renamed together.
+        self.obfuscatable_methods = obfuscatable_methods or set()
+        # Class names defined in this file, for `ClassName.method` sites
+        self.known_class_names: set[str] = set()
 
         self.ignore_set: set[str] = set(keyword.kwlist)
         self.ignore_set.update(dir(builtins))
@@ -371,12 +379,13 @@ class PythonObfuscator:
 
                 self.generic_visit(node)
 
-            def visit_ClassDef(self, node):
-                # Class-level names (class variables, constants, enum
-                # members, method names, nested classes) are referenced
-                # via `Class.attr` / `obj.attr`, and attribute names are
-                # never obfuscated. So these bound names must stay original
-                # too, or attribute lookups break.
+            def visit_ClassDef(self, node):  # noqa: C901
+                self.obfuscator.known_class_names.add(node.name)
+                # Class-level names referenced via `Class.attr` must stay
+                # original (attribute access is never renamed), except for
+                # method names that project analysis proved obfuscatable
+                # (their `self.method`/`ClassName.method` sites are renamed
+                # in tandem by visit_Attribute).
                 for stmt in node.body:
                     if isinstance(stmt, ast.Assign):
                         for target in stmt.targets:
@@ -386,9 +395,10 @@ class PythonObfuscator:
                         stmt.target, ast.Name
                     ):
                         self.obfuscator.ignore_set.add(stmt.target.id)
-                    elif isinstance(
-                        stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-                    ):
+                    elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        if stmt.name not in self.obfuscator.obfuscatable_methods:
+                            self.obfuscator.ignore_set.add(stmt.name)
+                    elif isinstance(stmt, ast.ClassDef):
                         self.obfuscator.ignore_set.add(stmt.name)
 
                 if self._should_obfuscate(node.name):
@@ -397,6 +407,26 @@ class PythonObfuscator:
                     )
                     if loc:
                         self._register_replacement(node.name, loc[0], loc[1])
+                self.generic_visit(node)
+
+            def visit_Attribute(self, node):
+                # Rename `self.method` / `ClassName.method` sites in tandem
+                # with the method definition for obfuscatable methods.
+                if node.attr in self.obfuscator.obfuscatable_methods:
+                    base = node.value
+                    if isinstance(base, ast.Name) and (
+                        base.id == "self"
+                        or base.id in self.obfuscator.known_class_names
+                    ):
+                        # Same guards as the definition site: underscore
+                        # names and preserved names must not be renamed
+                        if self._should_obfuscate(node.attr):
+                            col = node.end_col_offset - len(node.attr)
+                            self._register_replacement(
+                                node.attr,
+                                node.end_lineno,
+                                self._char_col(node.end_lineno, col),
+                            )
                 self.generic_visit(node)
 
             def visit_Name(self, node):
