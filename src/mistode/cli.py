@@ -261,15 +261,68 @@ class ObfuscationService:
         visit(tree.body)
         return names
 
-    def _collect_cross_file_imports(self, files: list[Path]) -> set[str]:
+    def _collect_all_exports(self, tree: ast.AST) -> set[str]:
+        """Collect names declared in a module's `__all__`, including
+        `__all__ += (...)` appends (possibly inside `if`/`try` blocks).
+        These are the module's true public API."""
+        exports: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Assign, ast.AugAssign)):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                if any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+                    value = node.value
+                    if isinstance(value, (ast.List, ast.Tuple)):
+                        for elt in value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(
+                                elt.value, str
+                            ):
+                                exports.add(elt.value)
+        return exports
+
+    def _get_public_names(self, tree: ast.AST) -> set[str]:
+        """Names a `from mod import *` would import: the module's `__all__`
+        if declared, otherwise its non-underscore module-level definitions."""
+        exports = self._collect_all_exports(tree)
+        if exports:
+            return exports
+        return {
+            n for n in self._collect_module_level_names(tree) if not n.startswith("_")
+        }
+
+    def _collect_cross_file_imports(self, files: list[Path]) -> set[str]:  # noqa: C901
         """
-        Python project mode: names imported via `from X import name`,
-        plus every module-level definition name. Module-level names are
-        the module's public surface and can be reached via `from X import
-        name`, `from X import *`, or `module.attr` - all of which are never
-        renamed - so they must keep their original spelling everywhere.
+        Python project mode: every name that is part of the project's
+        cross-module surface and therefore must keep its original spelling:
+
+        - `from X import name` bindings
+        - star-import targets: the names `from X import *` would expose
+          (X's `__all__`, or its public module-level definitions)
+        - module names bound by `import X.Y` / star imports (e.g. `mod` in
+          `mod.__all__`)
+
+        Module-level names that are *not* exported or referenced stay
+        obfuscatable.
         """
         imported: set[str] = set()
+
+        def module_name(path: Path) -> str:
+            root = (
+                self.options.input_file
+                if self.options.input_file.is_dir()
+                else self.options.input_file.parent
+            )
+            rel = path.relative_to(root)
+            parts = list(rel.parts)
+            if path.name == "__init__.py":
+                parts.pop()
+            elif parts:
+                parts[-1] = path.stem
+            return ".".join(parts)
+
+        file_by_module = {module_name(f): f for f in files}
+
         for f in files:
             if self._language_for_file(f) != Language.PYTHON:
                 continue
@@ -282,14 +335,58 @@ class ObfuscationService:
                 if isinstance(node, ast.ImportFrom):
                     for alias in node.names:
                         if alias.name == "*":
-                            # `from .mod import *` also binds the module
-                            # name itself (e.g. `mod.__all__`)
+                            # `from .mod import *` binds `mod` itself and
+                            # exposes mod's public names
                             if node.module:
-                                imported.add(node.module.split(".")[-1])
+                                mod = node.module.split(".")[-1]
+                                imported.add(mod)
+                                # Resolve relative star-import target
+                                if node.level > 0:
+                                    target = self._resolve_relative_module(
+                                        f, node.module, node.level
+                                    )
+                                    target_file = file_by_module.get(target)
+                                    if target_file:
+                                        try:
+                                            target_tree = ast.parse(
+                                                self._read_file(
+                                                    target_file,
+                                                    self._detect_encoding(target_file),
+                                                )
+                                            )
+                                            imported |= self._get_public_names(
+                                                target_tree
+                                            )
+                                        except OSError, UnicodeDecodeError, SyntaxError:
+                                            pass
                         else:
                             imported.add(alias.name)
-            imported |= self._collect_module_level_names(tree)
+            # `import X.Y` binds the top-level name X; `from X import *`
+            # binds X as well (used as `X.__all__`)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        imported.add(alias.name.split(".")[0])
         return imported
+
+    def _resolve_relative_module(
+        self, from_file: Path, module: str | None, level: int
+    ) -> str:
+        """
+        Resolve a relative import (`from .mod import *`, `from ..pkg.mod
+        import *`) to an absolute module name within the project.
+        """
+        rel = from_file.relative_to(self.options.input_file)
+        parts = list(rel.parts)
+        if from_file.name == "__init__.py":
+            base = parts[:-1]
+        else:
+            base = parts[:-1]
+        # level=1: current package; level=2: parent package, etc.
+        base = base[: len(base) - (level - 1)]
+        if module:
+            base += module.split(".")
+        return ".".join(base)
 
     def _collect_cross_file_keywords(self, files: list[Path]) -> set[str]:
         """

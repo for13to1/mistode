@@ -99,7 +99,8 @@ class TestCrossFileAnalysis:
 
         svc = _svc(Command.OBFUSCATE, a, tmp_path / "o.py")
         imports = svc._collect_cross_file_imports([a, b])
-        assert imports == {"helper", "foo", "bar", "rel"}
+        # `import z` binds the module name z, so it is preserved too
+        assert imports == {"helper", "foo", "bar", "rel", "z"}
 
     def test_c_shared_symbols(self, tmp_path: Path):
         h = tmp_path / "util.h"
