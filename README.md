@@ -196,6 +196,15 @@ Mistode uses a **dual-layer restoration system** to guarantee safety:
   chunks allow full restoration by anyone with the tool. `--password`
   adds obfuscation-grade protection of the embedded data, not
   cryptographic security.
+- **Renaming is conservative**: Python's dynamic features (attribute
+  access, `import`/star imports, keyword arguments, reflection) mean
+  most names are *external contracts* that cannot be renamed safely.
+  Project mode preserves every exported/imported/attribute-accessed
+  name, so the rename rate is roughly 5-10% on real code (function-local
+  variables and parameters). `--aggressive-methods` additionally renames
+  class methods whose receivers are provably local (`self`/class name),
+  which is **only safe for self-contained code** - libraries may be
+  called by external code through method names and will break.
 
 ## Contributing
 

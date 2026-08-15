@@ -70,6 +70,7 @@ class Options:
     length: int = 16
     language: Language = Language.PYTHON
     stats: bool = False
+    aggressive_methods: bool = False
 
 
 class ObfuscationService:
@@ -537,7 +538,14 @@ class ObfuscationService:
         python_imports = self._collect_cross_file_imports(files)
         python_keywords = self._collect_cross_file_keywords(files)
         python_attrs = self._collect_cross_file_attributes(files)
-        python_methods = self._collect_obfuscatable_methods(files)
+        # Method renaming is opt-in: it is only provably safe for
+        # self-contained code, since external callers of a library's
+        # methods are invisible to static analysis.
+        python_methods = (
+            self._collect_obfuscatable_methods(files)
+            if options.aggressive_methods
+            else set()
+        )
         c_shared = self._collect_cross_file_symbols(files)
 
         for f in files:
@@ -891,6 +899,16 @@ class ArgumentParser:
             action="store_true",
             help="Display obfuscation statistics",
         )
+        obf.add_argument(
+            "--aggressive-methods",
+            action="store_true",
+            help=(
+                "Rename class methods whose receivers are provably local "
+                "(self/class name). Only safe for self-contained code; "
+                "libraries may be called by external code through method "
+                "names and will break."
+            ),
+        )
 
     def _add_restore_command(self, subparsers) -> None:
         res = subparsers.add_parser(
@@ -954,6 +972,11 @@ class ArgumentParser:
                 raw.stats
                 if hasattr(raw, "stats") and raw.stats
                 else config.get("stats", False)
+            ),
+            aggressive_methods=(
+                raw.aggressive_methods
+                if hasattr(raw, "aggressive_methods") and raw.aggressive_methods
+                else False
             ),
         )
 

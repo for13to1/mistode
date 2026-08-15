@@ -174,6 +174,11 @@ class PythonObfuscator:
             elif isinstance(node, (ast.Nonlocal, ast.Global)):
                 for name in node.names:
                     self.ignore_set.add(name)
+            # Exception handler variables (`except ... as e`) bind via the
+            # ExceptHandler node, not a Name, so they would never be
+            # renamed consistently with their uses - preserve them
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                self.ignore_set.add(node.name)
 
     def _collect_all_exports(self, tree: ast.AST) -> None:
         """
