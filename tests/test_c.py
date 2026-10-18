@@ -359,11 +359,19 @@ int main() {
     obfuscator = c.CObfuscator(mm, gen)
     obfuscated = obfuscator.obfuscate(code)
 
-    # Verify function names are obfuscated
-    assert "add" not in obfuscated
+    # Verify the definition and the call site are renamed consistently.
+    # Strip the base64 chunk/metadata payloads first: their random text can
+    # coincidentally contain any short substring such as "add".
+    code_only = "\n".join(
+        line for line in obfuscated.splitlines() if "@mistode:" not in line
+    )
+    assert "add" not in code_only
+    # The call site must reference the renamed token, not the original name.
+    fn_line = next(ln for ln in code_only.splitlines() if "(*" in ln and "=" in ln)
+    assert "add" not in fn_line
     # Verify basic structure preservation
-    assert "int" in obfuscated
-    assert "return" in obfuscated
+    assert "int" in code_only
+    assert "return" in code_only
 
 
 def test_c_obfuscator_nested_functions():
