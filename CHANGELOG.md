@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Configurable payload cipher** (`--cipher` / `[tool.mistode] cipher`):
+  - `stream` (default when a password is given): authenticated stream
+    cipher from stdlib primitives - `scrypt` key derivation, SHA-256 CTR
+    keystream, HMAC-SHA256 tag (encrypt-then-MAC).
+  - `none`: plain base64 payloads.
+  - The nonce is derived per payload (SIV-style), so distinct payloads
+    never share a keystream while identical input still produces identical
+    output (reproducible builds keep working).
+  - Works for both Python and C; C previously ignored `--password`
+    entirely.
 - Project (directory) mode: `mistode o <dir>` obfuscates a whole project
   into a mirrored tree (e.g. `src/` -> `src.obf/`) keeping original
   filenames so imports/includes keep working, and `mistode r <dir>`
@@ -16,11 +26,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-file reference preservation in project mode: names imported via
   `from mod import name` (Python) and symbols shared across compilation
   units (C) keep their names in every file
-- Skip virtualenv/cache directories (`.venv`, `__pycache__`, `.git`, ...)
-  when collecting project files
+- **Non-source assets are mirrored by default** (`--assets copy|skip|list`):
+  templates, data files and configs are copied so the obfuscated project
+  stays runnable. Credential-looking files (`.env`, `*.pem`, `*.key`) are
+  copied by default; `--assets-skip-secrets` leaves them out.
+- `--aggressive-methods` now also applies in single-file mode (it was only
+  read in directory mode).
+- `project.py`: project scanning, asset mirroring and cross-file analysis
+  extracted from the CLI.
+
+### Changed
+
+- Python `main` is always preserved, so `console_scripts` entries and
+  `python -m` keep working on obfuscated code.
+- Cross-file attribute collection now records every `ast.Attribute`
+  (including chained accesses such as `sub.mod.timeout()`), not only
+  single-level `a.b`; this trades a slightly lower rename rate for not
+  breaking working code.
+- C chunk markers use block comments (`/* @mistode:chunk: ... */`) and
+  carry a trailing backslash inside multi-line macros, so macro bodies are
+  no longer swallowed by the preprocessor.
+- `CObfuscator.obfuscate()` accepts `source_dir`, passed to `gcc` as `-I`
+  so `#include "local.h"` resolves during symbol probing.
+- Project-mode restore rejects `--key` with an explicit error instead of
+  silently ignoring it; obfuscation writes a combined key for auditing.
+- Generated tokens are validated with `keyword.iskeyword()` (README
+  previously claimed this but the check did not exist).
+- The seven PEP 758 bare `except A, B:` clauses now use the explicit
+  parenthesised form; ruff targets py313 so the formatter preserves it.
+  `requires-python` stays at `>=3.14`.
 
 ### Fixed
 
+- Multi-character C operators (`++`, `--`, `->`, `<<`, `>>`, `+=`, `&&`,
+  `::`, ...) are tokenised as single tokens. Previously `a++` was split into
+  `a` `+` `+` and re-emitted as `a+ +`, which does not compile.
+- `+`/`-` spacing keeps unary and binary forms distinct: `a + ++b` no longer
+  becomes `a+++b`, which C re-lexes as `(a++) + b`.
+- C obfuscation now verifies its own output: the emitted code is
+  re-tokenised and compared with the source. A spacing bug that merges or
+  splits tokens (`a + ++b` -> `a+++b`) fails loudly instead of producing
+  silently different behaviour.
+- Obfuscating large files is linear again: the layout engine split the
+  source once per token, making a 9,600-line file take ~12s (now ~0.3s).
+  Identifier definition lookup also uses binary search over token lines.
+- `--cipher stream` without `--password` is now a usage error instead of
+  silently producing plaintext payloads.
+- Payloads from Mistode <= 0.1.3 (no nonce/tag) are reported as such instead
+  of failing with a misleading integrity error.
+- Encrypted files restored with a mismatched `--cipher` now say so instead
+  of claiming no password was given.
+- Added compile-and-run end-to-end tests for C (operators, macros, literals,
+  stdlib types) that compare the behaviour of original and obfuscated
+  binaries.
+- Identifiers on preprocessor directive lines (`#define`, `#ifdef` targets,
+  macro parameters) are no longer renamed: they are contracts the
+  preprocessor resolves, so renaming silently changed behaviour.
+- A file using token pasting (`a##b`) is left unrenamed. Pasting can
+  synthesise any identifier at expansion time, which static analysis cannot
+  predict, so renaming would break the build.
+- C external-symbol detection unions `gcc`/`nm` output with the heuristic
+  scan. `nm -u` cannot see typedefs (`size_t`, `FILE`) or macros (`stderr`,
+  `NULL`) because the preprocessor resolves them, so on machines with gcc
+  installed those names were renamed and the output failed to compile.
+- C output keeps a space between `+`/`+`, `-`/`-`, `/`/`*`, and between a
+  literal and a following identifier, so `a + +1`, `a / *b` and
+  `"%" PRIu64` are not rewritten into `a++1`, `a/*b` or `"%"PRIu64`.
+- C output keeps a space between a word-like token and a following string
+  or character literal, so `#define MSG "hello"` no longer collapses to
+  `#define MSG"hello"` (invalid under `-Werror`).
+- C restore now tokenises the whole cleaned stream instead of one line at a
+  time. Tokens that span lines (multi-line raw strings, backslash
+  continuations) previously split into fragments, desynced the layout queue
+  and corrupted the rest of the file on restoration.
+- C hexadecimal floating constants (`0x1.8p3`) are tokenised as one number;
+  previously the `p3` exponent was read as an identifier and renamed, so
+  the file failed to compile.
+- C++ raw string literals (`R"(...)"`, `R"delim(...)delim"`) are tokenised
+  as one literal so their contents are never scanned as code.
+- C token groups are now named (`ident`, `literal`, `number`, ...) so adding
+  a pattern alternative cannot silently shift group indices.
+- C character constants (`'a'`, `'\n'`, `L'w'`, `u8'z'`) are tokenised as
+  literals instead of quote + identifier. Previously the inner letter could
+  be renamed, turning `'a'` into a multi-character constant: `-Werror`
+  builds failed and `if (c == 'a')` silently became always-false.
+- Star imports are now resolved for absolute (`from utils import *`) and
+  package (`from . import *`) forms, not only relative `from .mod import *`.
+  Previously the target module's public names were not protected, so the
+  same function got two different obfuscated names and the project raised
+  `NameError` at runtime.
+- Directory restore now mirrors non-source assets back, so a restored
+  project is complete (obfuscation already copied them forward).
+- C `typedef struct { ... } Alias;` now records `Alias` (and not a struct
+  member) as the alias, and typedef aliases count as definitions. Shared
+  types in headers keep one name across translation units instead of
+  failing to compile with `unknown type name`.
+- Layout restoration re-raises `ValueError` from decryption, so a wrong or
+  missing password reports the integrity failure instead of the unrelated
+  "file does not appear to be obfuscated" message.
+- C restore also skips the `secure_metadata` line explicitly rather than
+  relying on it being a trailing comment.
+- `PythonObfuscator.restore()` no longer empties the output when the
+  artifact has no embedded metadata: metadata stripping now matches the
+  exact `#@mistode:metadata:` / `#@mistode:secure_metadata:` markers with
+  `rfind`, instead of the bare `#@mistode:` prefix that hit the first chunk
+  at offset 0.
+- `--key` no longer writes an empty mapping for Python files (the CLI was
+  overwriting the mapping the obfuscator had already written), and an
+  empty key no longer suppresses fallback to embedded metadata - the
+  previous behaviour printed `OK` while restoring nothing.
+- `#include "..."` is tokenised as a directive, so `include` no longer
+  leaks into the external-symbol set as a bogus symbol.
 - Cross-file import/symbol analysis now reads files with their detected
   encoding (previously UTF-8-only reads silently skipped non-UTF-8 files,
   breaking cross-file references in GBK/Big5 projects)

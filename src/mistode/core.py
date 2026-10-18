@@ -14,6 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import json
+import keyword
 import random
 
 
@@ -88,6 +89,7 @@ class NameGenerator:
             # Check for duplicates and homograph issues
             if (
                 token not in self.generated_tokens
+                and not keyword.iskeyword(token)
                 and self._validate_token_for_homographs(token)
             ):
                 self.generated_tokens.add(token)
@@ -96,7 +98,7 @@ class NameGenerator:
 
             self.collision_count += 1
 
-        # If we still can't generate unique tokens, try increasing length
+        # If unique tokens cannot be generated, try a longer length
         if self.length < 32:
             old_length = self.length
             self.length = min(
@@ -169,7 +171,7 @@ class NameGenerator:
         else:
             token = self._generate_random()
 
-        # Ensure the token doesn't contain homograph confusables
+        # Reject tokens containing homograph confusables
         while not self._validate_token_for_homographs(token):
             # If the token contains homograph confusables, regenerate
             if self.style == "similar":
@@ -224,10 +226,6 @@ class MappingManager:
     def __init__(self):
         self.mapping = {}
         self.reverse_mapping = {}
-        self.comments = {}
-        self.file_mapping = {}
-        self.encryption_key = None
-        self.string_quote_types = {}
         self.source_encoding = None
 
     def get_obfuscated_name(self, original, generator):
@@ -239,68 +237,24 @@ class MappingManager:
         self.reverse_mapping[new_name] = original
         return new_name
 
-    def add_comment(self, filename, comment):
-        if filename not in self.comments:
-            self.comments[filename] = []
-        self.comments[filename].append(comment)
-
-    def get_comments(self, filename):
-        # Check if filename is an obfuscated name
-        if filename in self.file_mapping:
-            filename = self.file_mapping[filename]
-        return self.comments.get(filename, [])
-
-    def add_string_quote_type(self, filename, string_value, quote_type):
-        if filename not in self.string_quote_types:
-            self.string_quote_types[filename] = []
-        self.string_quote_types[filename].append((string_value, quote_type))
-
-    def get_string_quote_types(self, filename):
-        # Check if filename is an obfuscated name
-        if filename in self.file_mapping:
-            filename = self.file_mapping[filename]
-        return self.string_quote_types.get(filename, [])
-
-    def register_file(self, original, obfuscated):
-        self.file_mapping[obfuscated] = original
-
     def load_mapping(self, filepath: str) -> None:
-        """
-        Load mapping data from JSON file.
-
-        Args:
-            filepath: Path to the mapping JSON file.
-        """
+        """Load a mapping written by :meth:`save_mapping`."""
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
             self.mapping = data.get("identifier_mapping", {})
             self.reverse_mapping = {v: k for k, v in self.mapping.items()}
-            self.comments = data.get("comments", {})
-            self.file_mapping = data.get("files", {})
-            self.encryption_key = data.get("encryption_key", None)
-            self.string_quote_types = data.get("string_quote_types", {})
-            self.source_encoding = data.get("source_encoding", None)
+            self.source_encoding = data.get("source_encoding")
 
     def save_mapping(self, filepath):
         with open(filepath, "w") as f:
             json.dump(
                 {
                     "identifier_mapping": self.mapping,
-                    "comments": self.comments,
-                    "files": self.file_mapping,
-                    "encryption_key": self.encryption_key,
-                    "string_quote_types": self.string_quote_types,
                     "source_encoding": self.source_encoding,
                 },
                 f,
                 indent=2,
             )
-
-    def set_encryption_key(self, key):
-        self.encryption_key = key
-
-    def get_encryption_key(self):
-        return self.encryption_key
 
     def get_original_name(self, obfuscated):
         return self.reverse_mapping.get(obfuscated, obfuscated)

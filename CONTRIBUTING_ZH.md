@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢您对 Mistode 项目的关注！我们欢迎各种形式的贡献。
+感谢您关注 Mistode 项目。我们欢迎各种形式的贡献。
 
 ## 开发环境设置
 
@@ -32,7 +32,7 @@
 ## 提交代码
 
 1. 创建功能分支：`git checkout -b feature/your-feature-name`
-2. 提交更改：`git commit -m "描述你的更改"`
+2. 提交更改：`git commit -m "简要说明本次更改"`
 3. 推送到远程：`git push origin feature/your-feature-name`
 4. 创建 Pull Request
 

@@ -2,7 +2,7 @@
 
 ## 📖 工作原理
 
-是的，你的理解完全正确！配置文件的工作方式如下：
+配置文件的工作方式如下：
 
 ### 1. 自动发现
 
@@ -29,9 +29,12 @@
 
 ```toml
 [tool.mistode]
-style = "random"      # 使用随机字符风格
-length = 20           # token 长度 20 字符
-stats = true          # 总是显示统计信息
+style = "random"          # 使用随机字符风格
+length = 20               # token 长度 20 字符
+stats = true              # 总是显示统计信息
+cipher = "stream"         # payload 加密算法（需配合 --password）
+assets = "copy"           # 复制非源码文件
+assets_skip_secrets = false
 ```
 
 ### 演示 1: 不使用配置文件
@@ -55,7 +58,7 @@ def Vbz585ziiZ5O21S5(ab065bO1bOS2zOsO):  # 易混淆字符
 $ mistode o demo_simple.py
 OK Obfuscated demo_simple.py -> demo_simple.obf.py
 
-=== Obfuscation Statistics ===  # 自动显示！
+=== Obfuscation Statistics ===  # 自动显示
   Identifiers obfuscated: 0
   Original size: 0.23 KB
   Obfuscated size: 1.08 KB
@@ -141,10 +144,13 @@ version = "1.0.0"
 
 # Mistode 配置
 [tool.mistode]
-style = "similar"     # 使用易混淆字符
-length = 18           # 18 字符长度
-stats = true          # 总是显示统计
-seed = 42             # 固定随机种子（可重现）
+style = "similar"          # 使用易混淆字符
+length = 18                # 18 字符长度
+stats = true               # 总是显示统计
+seed = 42                  # 固定随机种子（可重现）
+cipher = "stream"          # payload 加密算法：stream / none
+assets = "copy"            # 复制非源码文件：copy / skip / list
+assets_skip_secrets = false # 是否复制 .env / *.pem 等凭据文件
 ```
 
 ### 使用效果
@@ -172,7 +178,7 @@ $ mistode o module.py --style similar --length 18 --stats --seed 42
 
 ### Q3: 配置文件会影响所有子目录吗？
 
-**A**: 是的。如果在父目录找到配置文件，所有子目录执行 `mistode` 都会使用该配置（除非子目录有自己的 `pyproject.toml`）。
+**A**: 会。父目录的配置对子目录生效，除非子目录有自己的 `pyproject.toml`。
 
 ### Q4: 不想使用配置文件怎么办？
 
@@ -193,7 +199,7 @@ $ mistode o module.py --style similar --length 18 --stats --seed 42
 
 ---
 
-## ✅ 总结
+## 总结
 
 配置文件的核心优势：
 
@@ -202,4 +208,18 @@ $ mistode o module.py --style similar --length 18 --stats --seed 42
 3. **灵活**: 仍然可以用命令行参数临时覆盖
 4. **自动**: 无需手动指定配置文件路径
 
-**是的，只要执行目录下（或父目录）有 `pyproject.toml` 文件，并且包含 `[tool.mistode]` 配置，mistode 执行时就会自动应用这些配置！** ✨
+执行目录或任一父目录中的 `pyproject.toml` 若包含 `[tool.mistode]`，mistode 会自动应用这些配置。
+
+---
+
+## 🔐 加密与交付相关配置
+
+| 配置项 | 取值 | 说明 |
+| :--- | :--- | :--- |
+| `cipher` | `stream` / `none` | payload 加密算法。`stream` 为 scrypt + SHA-256 CTR + HMAC，需配合 `--password`。 |
+| `assets` | `copy` / `skip` / `list` | 是否复制非源码文件（模板、数据、配置）。`copy` 保证产物可直接运行。 |
+| `assets_skip_secrets` | `true` / `false` | 复制时跳过 `.env`、`*.pem`、`*.key` 等凭据类文件。 |
+
+> 注意：`--password` 是命令行参数，不建议写进 `pyproject.toml`。
+> 它保护的是"能否还原"，不是"能否运行"——没有密码的人依然可以运行
+> 混淆后的代码。

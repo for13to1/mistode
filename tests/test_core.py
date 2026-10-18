@@ -123,71 +123,31 @@ class TestMappingManager:
         mm = MappingManager()
         assert mm.mapping == {}
         assert mm.reverse_mapping == {}
-        assert mm.file_mapping == {}
-
-    def test_file_mapping_operations(self):
-        """
-        Test file mapping operations
-        """
-        mm = MappingManager()
-
-        # Register file mapping
-        mm.register_file("original.py", "obfuscated.py")
-        assert "obfuscated.py" in mm.file_mapping
-        assert mm.file_mapping["obfuscated.py"] == "original.py"
-
-        # Test comment and string quote type mapping
-        mm.add_comment("original.py", "test comment")
-        mm.add_string_quote_type("original.py", "test string", "double")
-
-        comments = mm.get_comments("original.py")
-        quote_types = mm.get_string_quote_types("original.py")
-
-        assert "test comment" in comments
-        # quote_types is a list, check if it contains expected item
-        assert any("test string" in str(item) for item in quote_types)
-
-    def test_file_mapping(self):
-        """
-        Test file mapping
-        """
-        mm = MappingManager()
-
-        # Register file mapping
-        mm.register_file("original.py", "obfuscated.py")
-        assert "obfuscated.py" in mm.file_mapping
-        assert mm.file_mapping["obfuscated.py"] == "original.py"
+        assert mm.source_encoding is None
 
     def test_save_load_mapping(self):
         """
         Test mapping save and load
         """
         mm = MappingManager()
+        mm.mapping = {"original_name": "obfuscated_name"}
+        mm.reverse_mapping = {"obfuscated_name": "original_name"}
+        mm.source_encoding = "utf-8"
 
-        # Add some file mappings and comments
-        mm.register_file("test.py", "test.obf.py")
-        mm.add_comment("test.py", "test comment")
-        mm.add_string_quote_type("test.py", "test string", "double")
-
-        # Save to temporary file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             mapping_file = f.name
 
         try:
             mm.save_mapping(mapping_file)
-
-            # Verify file exists
             assert Path(mapping_file).exists()
 
-            # Create new manager and load mapping
             mm2 = MappingManager()
             mm2.load_mapping(mapping_file)
 
-            # Verify mapping loaded correctly
-            assert mm2.file_mapping == {"test.obf.py": "test.py"}
-
+            assert mm2.mapping == {"original_name": "obfuscated_name"}
+            assert mm2.reverse_mapping == {"obfuscated_name": "original_name"}
+            assert mm2.source_encoding == "utf-8"
         finally:
-            # Clean up temporary file
             if Path(mapping_file).exists():
                 Path(mapping_file).unlink()
 
@@ -308,74 +268,24 @@ class TestMappingManagerEdgeCases:
         """
         mm = MappingManager()
         assert mm.get_original_name("anything") == "anything"
-        assert mm.get_comments("anyfile") == []
-        assert mm.get_string_quote_types("anyfile") == []
 
-    def test_duplicate_file_registration(self):
+    def test_mapping_roundtrip_preserves_encoding(self):
         """
-        Test duplicate file registration
+        Test save/load keeps the mapping and the source encoding
         """
         mm = MappingManager()
-        mm.register_file("orig.py", "obf.py")
-        mm.register_file("orig2.py", "obf.py")
-
-        assert mm.file_mapping["obf.py"] == "orig2.py"
-
-    def test_comment_retrieval(self):
-        """
-        Test comment retrieval
-        """
-        mm = MappingManager()
-
-        mm.add_comment("test.py", "comment1")
-        mm.add_comment("test.py", "comment2")
-
-        comments = mm.get_comments("test.py")
-        assert len(comments) == 2
-        assert "comment1" in comments
-        assert "comment2" in comments
-
-    def test_string_quote_types(self):
-        """
-        Test string quote types
-        """
-        mm = MappingManager()
-
-        mm.add_string_quote_type("test.py", "string1", "single")
-        mm.add_string_quote_type("test.py", "string2", "double")
-
-        quote_types = mm.get_string_quote_types("test.py")
-        assert len(quote_types) == 2
-
-    def test_encryption_key(self):
-        """
-        Test encryption key
-        """
-        mm = MappingManager()
-        assert mm.get_encryption_key() is None
-
-        mm.set_encryption_key("secret_key")
-        assert mm.get_encryption_key() == "secret_key"
-
-    def test_mapping_with_key(self):
-        """
-        Test save/load mapping with key
-        """
-        mm = MappingManager()
-        mm.register_file("test.py", "test.obf.py")
-        mm.set_encryption_key("my_secret_key")
+        mm.mapping = {"api": "x1"}
+        mm.source_encoding = "gb18030"
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             mapping_file = f.name
 
         try:
             mm.save_mapping(mapping_file)
-
             mm2 = MappingManager()
             mm2.load_mapping(mapping_file)
-
-            assert mm2.file_mapping == {"test.obf.py": "test.py"}
-            assert mm2.encryption_key == "my_secret_key"
+            assert mm2.get_original_name("x1") == "api"
+            assert mm2.source_encoding == "gb18030"
         finally:
             if Path(mapping_file).exists():
                 Path(mapping_file).unlink()

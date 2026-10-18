@@ -50,7 +50,10 @@ addopts = "-v --tb=short"
 
 [tool.ruff]
 line-length = 88
-target-version = "py314"
+# Keep the formatter from rewriting `except (A, B):` into the
+# Python 3.14-only bare form (PEP 758). Runtime support is still
+# governed by requires-python above.
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "C90"]

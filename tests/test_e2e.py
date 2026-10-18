@@ -555,3 +555,171 @@ class TestSelfHost:
             original = (src_dir / rel).read_bytes()
             restored = (res_dir / rel).read_bytes()
             assert restored == original, f"mismatch in {rel}"
+
+
+class TestCipherSelection:
+    """`--cipher` controls whether payloads are encrypted."""
+
+    SRC = "def f(x):\n    return x + 1\n"
+
+    def test_cipher_none_writes_plain_chunks(self, tmp_path: Path):
+        src = tmp_path / "a.py"
+        src.write_text(self.SRC, encoding="utf-8")
+        obf = tmp_path / "a.obf.py"
+        res = tmp_path / "a.res.py"
+
+        result = run_cli(
+            "o", str(src), "--out", str(obf), "--password", "pw", "--cipher", "none"
+        )
+        assert result.returncode == 0, result.stderr
+        text = obf.read_text(encoding="utf-8")
+        assert "#@mistode:chunk:" in text
+        assert "secure_chunk" not in text
+
+        # No password needed: payloads were never encrypted.
+        result = run_cli("r", str(obf), "--out", str(res))
+        assert result.returncode == 0, result.stderr
+        assert res.read_text(encoding="utf-8") == self.SRC
+
+    def test_stream_is_default_with_password(self, tmp_path: Path):
+        src = tmp_path / "a.py"
+        src.write_text(self.SRC, encoding="utf-8")
+        obf = tmp_path / "a.obf.py"
+        run_cli("o", str(src), "--out", str(obf), "--password", "pw")
+        assert "secure_chunk" in obf.read_text(encoding="utf-8")
+
+    def test_cipher_requires_password_to_encrypt(self, tmp_path: Path):
+        # Asking for `stream` without a password is a usage error, not a
+        # silent downgrade to plaintext.
+        src = tmp_path / "a.py"
+        src.write_text(self.SRC, encoding="utf-8")
+        obf = tmp_path / "a.obf.py"
+        result = run_cli("o", str(src), "--out", str(obf), "--cipher", "stream")
+        assert result.returncode != 0
+        assert "requires --password" in (result.stdout + result.stderr)
+        assert not obf.exists()
+
+
+class TestProjectAssetsEndToEnd:
+    def test_assets_are_copied_and_project_still_runs(self, tmp_path: Path):
+        proj = tmp_path / "proj"
+        (proj / "pkg").mkdir(parents=True)
+        (proj / "data").mkdir()
+        (proj / "pkg" / "main.py").write_text(
+            "import json, os\n"
+            "HERE = os.path.dirname(os.path.abspath(__file__))\n"
+            'with open(os.path.join(HERE, "..", "data", "conf.json")) as f:\n'
+            '    print(json.load(f)["n"])\n',
+            encoding="utf-8",
+        )
+        (proj / "data" / "conf.json").write_text('{"n": 42}\n', encoding="utf-8")
+
+        obf_dir = tmp_path / "proj.obf"
+        result = run_cli("o", str(proj), "--out", str(obf_dir))
+        assert result.returncode == 0, result.stderr
+        assert (obf_dir / "data" / "conf.json").exists()
+
+        run = subprocess.run(
+            [sys.executable, str(obf_dir / "pkg" / "main.py")],
+            capture_output=True,
+            text=True,
+        )
+        assert run.returncode == 0, run.stderr
+        assert run.stdout.strip() == "42"
+
+    def test_restore_directory_rejects_key(self, tmp_path: Path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "a.py").write_text("x = 1\n", encoding="utf-8")
+        obf_dir = tmp_path / "proj.obf"
+        assert run_cli("o", str(proj), "--out", str(obf_dir)).returncode == 0
+
+        result = run_cli(
+            "r",
+            str(obf_dir),
+            "--out",
+            str(tmp_path / "proj.res"),
+            "--key",
+            str(tmp_path / "k.json"),
+        )
+        assert result.returncode != 0
+        assert "--key is not supported" in (result.stdout + result.stderr)
+
+
+class TestCBehaviourPreservation:
+    """Obfuscated C must compile and behave identically to the original.
+
+    String assertions cannot catch token-spacing bugs (`a++` -> `a+ +`);
+    only running both binaries can.
+    """
+
+    CASES = {
+        "operators": (
+            "#include <stdio.h>\n"
+            "int main(void){ int a=1,b=2; a++; int c=a+++b;"
+            " int d=a + ++b; int e=a - --b;"
+            ' printf("%d %d %d %d %d\\n",a,b,c,d,e); return 0; }\n'
+        ),
+        "compound": (
+            "#include <stdio.h>\n"
+            "int main(void){ int a=1,b=2; a+=b; a-=1; a*=2; a>>=1;"
+            ' printf("%d\\n", a); return 0; }\n'
+        ),
+        "macros": (
+            "#include <stdio.h>\n"
+            '#define MSG "hi"\n'
+            "#define SWAP(a,b) do { \\\n"
+            "    int t = (a); \\\n"
+            "    (a) = (b); \\\n"
+            "    (b) = t; \\\n"
+            "} while(0)\n"
+            "int main(void){ int x=1,y=2; SWAP(x,y);"
+            ' printf("%s %d %d\\n", MSG, x, y); return 0; }\n'
+        ),
+        "literals": (
+            "#include <stdio.h>\n"
+            "int main(void){ char c='c'; double d=0x1.8p3;"
+            ' const char *s = R"(raw "text")";'
+            ' printf("%c %f %s\\n", c, d, s); return 0; }\n'
+        ),
+        "stdlib": (
+            "#include <stdio.h>\n"
+            "#include <stddef.h>\n"
+            'int main(void){ size_t n = 10; FILE *f = fopen("/dev/null", "r");'
+            ' if (!f) { fprintf(stderr, "e"); return 1; }'
+            ' printf("%zu\\n", n); fclose(f); return 0; }\n'
+        ),
+    }
+
+    @pytest.mark.parametrize("name", sorted(CASES))
+    def test_compile_and_run_matches(self, name: str, tmp_path: Path):
+        if shutil.which("gcc") is None:
+            pytest.skip("gcc not available")
+
+        source = self.CASES[name]
+        src = tmp_path / "a.c"
+        src.write_text(source, encoding="utf-8")
+
+        original_bin = tmp_path / "orig"
+        compiled = subprocess.run(
+            ["gcc", str(src), "-o", str(original_bin)],
+            capture_output=True,
+            text=True,
+        )
+        assert compiled.returncode == 0, compiled.stderr
+
+        obf = tmp_path / "a.obf.c"
+        assert run_cli("o", str(src), "--out", str(obf)).returncode == 0
+
+        obf_bin = tmp_path / "obf"
+        compiled = subprocess.run(
+            ["gcc", "-Werror", str(obf), "-o", str(obf_bin)],
+            capture_output=True,
+            text=True,
+        )
+        assert compiled.returncode == 0, compiled.stderr
+
+        expected = subprocess.run([str(original_bin)], capture_output=True, text=True)
+        actual = subprocess.run([str(obf_bin)], capture_output=True, text=True)
+        assert actual.stdout == expected.stdout
+        assert actual.returncode == expected.returncode

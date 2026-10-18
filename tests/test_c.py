@@ -16,7 +16,7 @@
 
 import pytest
 
-from src.mistode import c
+from mistode import c
 
 
 def test_c_obfuscator_basic():
@@ -35,7 +35,7 @@ int main() {
 """
 
     # Create C obfuscator instance
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -75,7 +75,7 @@ int main() {
 """
 
     # Create C obfuscator instance
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -115,7 +115,7 @@ int main() {
 """
 
     # Create C obfuscator instance
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -148,7 +148,7 @@ int main() {
 """
 
     # Create C obfuscator instance
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -175,7 +175,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -206,7 +206,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -238,7 +238,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -265,7 +265,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -291,7 +291,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -323,7 +323,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -352,7 +352,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -381,7 +381,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -410,7 +410,7 @@ int main() {
 }
 """
 
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -438,8 +438,8 @@ int main() {
 }
 """
 
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -479,15 +479,15 @@ def test_c_obfuscator_heuristic_scanner():
     }
     """
 
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
     obfuscator = c.CObfuscator(mm, gen)
 
     # Force use of scanner directly to test the logic
-    externals = obfuscator._scan_for_external_symbols(code)
+    externals = obfuscator._simple_scanner(code)
 
     # 'printf' is used and not defined -> External
     assert "printf" in externals
@@ -522,8 +522,8 @@ int    main(  ) {
 }
 """
 
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -534,7 +534,7 @@ int    main(  ) {
 
     # Assert obfuscation happened
     assert "val" not in obfuscated
-    assert "// @mistode:chunk:" in obfuscated
+    assert "@mistode:chunk:" in obfuscated
 
     # Restore
     restored = obfuscator.restore(obfuscated)
@@ -561,8 +561,8 @@ int main() {
 }
 """
 
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -596,8 +596,8 @@ int main() {
 }
 """
 
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     # Obfuscate with a fresh manager (simulates one process/run)
     obfuscator = c.CObfuscator(MappingManager(), NameGenerator())
@@ -617,8 +617,8 @@ def test_c_obfuscator_missing_mapping_raises():
     Restoration without any mapping (no metadata, no key) must fail
     loudly instead of silently returning obfuscated names.
     """
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     obfuscator = c.CObfuscator(MappingManager(), NameGenerator())
     obfuscated = obfuscator.obfuscate("int main() { return 0; }")
@@ -648,8 +648,8 @@ int main() {
 }
 """
 
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     mm = MappingManager()
     gen = NameGenerator()
@@ -683,8 +683,8 @@ int main() {
 }
 """
 
-    from src.mistode import c
-    from src.mistode.core import MappingManager, NameGenerator
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
 
     # Force the heuristic path by pretending gcc/nm are not available
     monkeypatch.setattr(c.shutil, "which", lambda _name: None)
@@ -700,3 +700,540 @@ int main() {
     assert "main" in obfuscated
     # my_func is defined and should be obfuscated
     assert "my_func" not in obfuscated
+
+
+MULTILINE_MACRO_SRC = """\
+#include <stdio.h>
+
+#define SWAP(a, b) do { \\
+    int tmp = (a); \\
+    (a) = (b); \\
+    (b) = tmp; \\
+} while (0)
+
+int main(void) {
+    int x = 1, y = 2;
+    SWAP(x, y);
+    printf("%d %d\\n", x, y);
+    return 0;
+}
+"""
+
+
+def test_c_multiline_macro_restores_and_compiles(tmp_path):
+    """Chunk comments must not break macro bodies continued with `\\`."""
+    import shutil
+    import subprocess
+
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    obfuscator = c.CObfuscator(MappingManager(), NameGenerator(), "macro.c")
+    obfuscated = obfuscator.obfuscate(MULTILINE_MACRO_SRC)
+
+    # Block comments keep the macro valid; `//` would be spliced into the
+    # logical line after a continuation backslash.
+    assert "/* @mistode:chunk:" in obfuscated
+
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "macro.c").restore(
+        obfuscated
+    )
+    assert restored == MULTILINE_MACRO_SRC
+
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc not available")
+    src = tmp_path / "macro.obf.c"
+    src.write_text(obfuscated, encoding="utf-8")
+    binary = tmp_path / "macro.out"
+    compiled = subprocess.run(
+        ["gcc", str(src), "-o", str(binary)], capture_output=True, text=True
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    run = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip() == "2 1"
+
+
+def test_c_quoted_include_is_not_a_symbol():
+    """`#include "local.h"` must be one directive token, not `include`."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    code = '#include "local.h"\n#include <stdio.h>\nint main(void){return 0;}\n'
+    obfuscator = c.CObfuscator(MappingManager(), NameGenerator(), "inc.c")
+    externals = obfuscator._identify_external_symbols(code)
+    assert "include" not in externals
+
+
+def test_c_quoted_include_preserves_header_name():
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    code = '#include "my_header.h"\nint compute(int v){return v;}\n'
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "inc.c").obfuscate(
+        code
+    )
+    assert '#include"my_header.h"' in obfuscated or '#include "my_header.h"' in (
+        obfuscated
+    )
+
+
+class TestCPassword:
+    """C payloads must honour --password like Python ones."""
+
+    SRC = "#include <stdio.h>\nint compute(int v){return v * 2;}\n"
+
+    def test_roundtrip(self):
+        from mistode import c
+        from mistode.core import MappingManager, NameGenerator
+
+        obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "p.c").obfuscate(
+            self.SRC, encryption_key="s3cret"
+        )
+        assert "/* @mistode:secure_chunk:" in obfuscated
+        assert "/* @mistode:chunk:" not in obfuscated
+
+        restored = c.CObfuscator(MappingManager(), NameGenerator(), "p.c").restore(
+            obfuscated, encryption_key="s3cret"
+        )
+        assert restored == self.SRC
+
+    def test_wrong_password_is_rejected(self):
+        from mistode import c
+        from mistode.core import MappingManager, NameGenerator
+
+        obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "p.c").obfuscate(
+            self.SRC, encryption_key="right"
+        )
+        with pytest.raises(ValueError, match="Integrity check failed"):
+            c.CObfuscator(MappingManager(), NameGenerator(), "p.c").restore(
+                obfuscated, encryption_key="wrong"
+            )
+
+    def test_missing_password_is_rejected(self):
+        from mistode import c
+        from mistode.core import MappingManager, NameGenerator
+
+        obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "p.c").obfuscate(
+            self.SRC, encryption_key="right"
+        )
+        with pytest.raises(ValueError, match="File is encrypted"):
+            c.CObfuscator(MappingManager(), NameGenerator(), "p.c").restore(obfuscated)
+
+
+def test_c_typedef_struct_alias_is_collected():
+    """`typedef struct { ... } Point;` must yield Point, not a member."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    obfuscator = c.CObfuscator(MappingManager(), NameGenerator(), "t.c")
+    code = "typedef struct { int x; int y; } MyPoint;\n"
+    sig = [m for m in obfuscator._tokenize(code) if m.group(0).strip()]
+
+    assert obfuscator._collect_user_types(sig) == {"MyPoint"}
+    # The alias is defined here, so declarations like `MyPoint p;` are not
+    # mistaken for external symbols.
+    assert "MyPoint" in obfuscator._scan_defined_symbols(code)
+
+
+def test_c_typedef_struct_survives_project_mode(tmp_path):
+    """Shared typedef'd types must keep one name across files."""
+    from mistode.cli import Command, ObfuscationService, Options
+
+    proj = tmp_path / "proj"
+    (proj / "inc").mkdir(parents=True)
+    (proj / "inc" / "types.h").write_text(
+        "typedef struct { int x; int y; } MyPoint;\nint area(MyPoint p);\n",
+        encoding="utf-8",
+    )
+    (proj / "a.c").write_text(
+        '#include "types.h"\nint area(MyPoint p){return p.x*p.y;}\n',
+        encoding="utf-8",
+    )
+    (proj / "b.c").write_text(
+        '#include "types.h"\nint main(void){MyPoint p={2,3};return area(p);}\n',
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "proj.obf"
+    ObfuscationService(
+        Options(command=Command.OBFUSCATE, input_file=proj, output_file=out)
+    ).execute()
+
+    header = (out / "inc" / "types.h").read_text(encoding="utf-8")
+    a_source = (out / "a.c").read_text(encoding="utf-8")
+    assert "MyPoint" in header
+    assert "MyPoint" in a_source
+
+
+def test_c_char_literals_are_not_renamed():
+    """`'a'` must stay a character constant, not become an identifier."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    code = (
+        "#include <stdio.h>\n"
+        "int main(void){\n"
+        "    char a = 'a';\n"
+        "    if (a == 'a') { printf(\"PASS\\n\"); return 0; }\n"
+        "    return 1;\n"
+        "}\n"
+    )
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "char.c").obfuscate(
+        code
+    )
+    # The variable is renamed, the constant is untouched.
+    assert "'a'" in obfuscated
+    assert "char a = " not in obfuscated
+
+
+@pytest.mark.parametrize("literal", ["'a'", "'\\n'", "'\\''", "L'w'", "u8'z'", '"str"'])
+def test_c_literals_are_single_tokens(literal):
+    from mistode import c
+
+    tokens = [
+        m.group(0) for m in c.CObfuscator.TOKEN_PATTERN.finditer(f"x = {literal};")
+    ]
+    assert literal in tokens
+
+
+def test_c_hex_float_literals_are_single_tokens():
+    """`0x1.8p3` must stay one token; `p3` is not an identifier."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    code = "double d = 0x1.8p3;\ndouble e = 0x1p-5;\n"
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "hex.c").obfuscate(
+        code
+    )
+    assert "0x1.8p3" in obfuscated
+    assert "0x1p-5" in obfuscated
+
+
+@pytest.mark.parametrize(
+    "literal",
+    ['R"(raw "quoted" ) text)"', 'R"xx(has ) and " inside)xx"', 'R"(plain)"'],
+)
+def test_cpp_raw_strings_are_single_tokens(literal):
+    from mistode import c
+
+    tokens = [
+        m.group(0) for m in c.CObfuscator.TOKEN_PATTERN.finditer(f"x = {literal};")
+    ]
+    assert literal in tokens
+
+
+MULTILINE_RAW_SRC = """\
+#include <stdio.h>
+int main(void) {
+    const char *s = R"(hello
+world)";
+    printf("%s\\n", s);
+    return 0;
+}
+"""
+
+
+def test_c_multiline_raw_string_is_lossless():
+    """Tokens spanning lines must not desync the layout queue on restore."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    obfuscator = c.CObfuscator(MappingManager(), NameGenerator(), "raw.cpp")
+    obfuscated = obfuscator.obfuscate(MULTILINE_RAW_SRC)
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "raw.cpp").restore(
+        obfuscated
+    )
+    assert restored == MULTILINE_RAW_SRC
+
+
+def test_c_backslash_continued_string_is_lossless():
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = (
+        "#include <stdio.h>\n"
+        "int main(void) {\n"
+        '    const char *s = "hello \\\n'
+        'world";\n'
+        '    printf("%s\\n", s);\n'
+        "    return 0;\n"
+        "}\n"
+    )
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "ml.c").obfuscate(
+        source
+    )
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "ml.c").restore(
+        obfuscated
+    )
+    assert restored == source
+
+
+def test_c_string_macro_keeps_separating_space():
+    """`#define MSG "hello"` must not become `#define MSG"hello"`."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = "#define MSG \"hello\"\n#define CH 'x'\nint main(void){return 0;}\n"
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "m.c").obfuscate(
+        source
+    )
+    assert '#define MSG "hello"' in obfuscated
+    assert "#define CH 'x'" in obfuscated
+    assert '#define MSG"hello"' not in obfuscated
+
+
+def test_c_stdlib_typedefs_and_macros_survive_gcc_path(monkeypatch):
+    """`nm -u` cannot see typedefs/macros; they must stay protected."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    code = (
+        "#include <stdio.h>\n"
+        "#include <stddef.h>\n"
+        "int main(void){\n"
+        "    size_t len = 10;\n"
+        '    FILE *f = fopen("/dev/null", "r");\n'
+        '    if (!f) { fprintf(stderr, "e"); return 1; }\n'
+        '    printf("%zu", len);\n'
+        "    return 0;\n"
+        "}\n"
+    )
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "s.c").obfuscate(code)
+    for name in ("size_t", "FILE", "stderr", "fopen", "printf"):
+        assert name in obfuscated, f"{name} must be preserved"
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ("a /", "*b"),  # would open a block comment
+        ("+", "+"),  # `a + +1` would become `a++1`
+        ("-", "-"),  # `a - -1` would become `a--1`
+        ('"%"', "PRIu64"),  # would become "%"PRIu64
+    ],
+)
+def test_c_adjacent_tokens_do_not_fuse(left, right):
+    """Tokens that would fuse into comments or ++/-- must stay separated."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    obf = c.CObfuscator(MappingManager(), NameGenerator(), "sp.c")
+    assert obf._needs_space(left, right) is True
+
+
+def test_c_preprocessor_identifiers_are_preserved():
+    """`#define` targets and macro parameters are preprocessor contracts."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = (
+        "#include <stdio.h>\n"
+        "#define STR(x) #x\n"
+        "#define MAX 100\n"
+        "#ifdef DEBUG\n"
+        "#define LEVEL 2\n"
+        "#endif\n"
+        "int main(void){ return MAX; }\n"
+    )
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "p.c").obfuscate(
+        source
+    )
+    for name in ("STR", "MAX", "DEBUG", "LEVEL", "x"):
+        assert name in obfuscated, f"{name} must be preserved"
+
+
+def test_c_token_pasting_disables_renaming():
+    """`a##b` can synthesise any name, so the file is left unrenamed."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = (
+        "#include <stdio.h>\n"
+        "#define CAT(a,b) a##b\n"
+        'int main(void){ int foobar = 7; printf("%d", CAT(foo,bar)); return 0; }\n'
+    )
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "t.c").obfuscate(
+        source
+    )
+    assert "foobar" in obfuscated
+    assert "CAT(foo,bar)" in obfuscated
+
+
+def test_c_without_token_pasting_still_renames():
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = "int compute(int value){int tmp=value*2;return tmp;}\n"
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "n.c").obfuscate(
+        source
+    )
+    assert "compute" not in obfuscated
+    assert "value" not in obfuscated
+
+
+def test_c_macro_param_shadowing_local_var():
+    """宏参数与变量同名时，宏定义内部的参数名不得被改名，避免 #x 产物损坏。"""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = (
+        "#define TO_STR(x) #x\n"
+        "int x = 5;\n"
+        "#ifdef DEBUG\n"
+        "int flag = 1;\n"
+        "#endif\n"
+        "int main(void) { return x; }\n"
+    )
+    obf = c.CObfuscator(MappingManager(), NameGenerator(), "sh.c").obfuscate(source)
+    assert "#define TO_STR(x) #x" in obf or "#define TO_STR(x)#x" in obf
+    assert "#ifdef DEBUG" in obf
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "sh.c").restore(obf)
+    assert restored == source
+
+
+def test_c_hashhash_in_comments_or_strings_does_not_disable_obfuscation():
+    """注释或字符串中的 ## 不能导致整个文件的混淆功能停用。"""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = (
+        "// Section ##1\n"
+        "int calculate(int value) {\n"
+        '    printf("Item ##1: %d\\n", value);\n'
+        "    return value * 2;\n"
+        "}\n"
+    )
+    obf = c.CObfuscator(MappingManager(), NameGenerator(), "hh.c").obfuscate(source)
+    assert "calculate" not in obf
+    assert "value" not in obf
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "hh.c").restore(obf)
+    assert restored == source
+
+
+def test_c_increment_operators_stay_intact():
+    """`a++` must stay one token, not become `a+ +`."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = (
+        "#include <stdio.h>\n"
+        "int main(void){\n"
+        "    int a = 1, b = 2;\n"
+        "    a++;\n"
+        "    int c = a+++b;\n"
+        '    printf("%d %d %d\\n", a, b, c);\n'
+        "    return 0;\n"
+        "}\n"
+    )
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "i.c").obfuscate(
+        source
+    )
+    assert "++;" in obfuscated
+    assert "+ +;" not in obfuscated
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "i.c").restore(
+        obfuscated
+    )
+    assert restored == source
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        "++",
+        "--",
+        "->",
+        "<<=",
+        ">>=",
+        "<<",
+        ">>",
+        "<=",
+        ">=",
+        "==",
+        "!=",
+        "&&",
+        "||",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "%=",
+        "&=",
+        "|=",
+        "^=",
+        "::",
+    ],
+)
+def test_c_multi_char_operators_are_single_tokens(op):
+    from mistode import c
+
+    tokens = [m.group("op") for m in c.CObfuscator.TOKEN_PATTERN.finditer(f"a {op} b")]
+    assert op in tokens
+
+
+@pytest.mark.parametrize(
+    "expr,setup,expected",
+    [
+        ("a + ++b", "int a=1,b=2;", "+ ++"),
+        ("a - --b", "int a=10,b=3;", "- --"),
+        ("a++ + b", "int a=1,b=2;", "+++"),
+        ("a + +1", "int a=1;", "+ +"),
+        ("a++", "int a=1;", "++;"),
+    ],
+)
+def test_c_unary_and_binary_operators_stay_distinct(expr, setup, expected):
+    """Re-lexing must not change the expression (`a + ++b` vs `a+++b`)."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = f"int main(void){{ {setup} int r = {expr}; return r; }}\n"
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "u.c").obfuscate(
+        source
+    )
+    assert expected in obfuscated
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "u.c").restore(
+        obfuscated
+    )
+    assert restored == source
+
+
+def test_c_rejects_output_with_changed_token_stream():
+    """A spacing bug that merges tokens must fail loudly, not emit bad C."""
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    obfuscator = c.CObfuscator(MappingManager(), NameGenerator(), "v.c")
+    source = "int main(void){ int a=1,b=2; int r=a + ++b; return r; }\n"
+    broken = "int main(void){int a=1,b=2;int r=a+++b;return r;}\n"
+    with pytest.raises(ValueError, match="Refusing to emit C output"):
+        obfuscator._verify_token_stream(source, broken)
+
+
+def test_c_token_stream_survives_tricky_spacing():
+    from mistode import c
+    from mistode.core import MappingManager, NameGenerator
+
+    source = (
+        "#include <stdio.h>\n"
+        '#define MSG "hi"\n'
+        "int main(void){ int a=1,b=2; a++; int c=a+++b; int d=a + ++b;"
+        " int e=a / *(&b); int f=a - -1;"
+        ' printf("%d %d %d %d %d %s\\n",a,b,c,d,e,MSG); return 0; }\n'
+    )
+    # obfuscate() runs the validator internally.
+    obfuscated = c.CObfuscator(MappingManager(), NameGenerator(), "v.c").obfuscate(
+        source
+    )
+    restored = c.CObfuscator(MappingManager(), NameGenerator(), "v.c").restore(
+        obfuscated
+    )
+    assert restored == source
+
+
+@pytest.mark.parametrize("prefix", ["", "u8", "L", "u", "U"])
+def test_c_raw_string_prefixes_are_single_tokens(prefix):
+    from mistode import c
+
+    literal = f'{prefix}R"(raw)"'
+    tokens = [m.group(0) for m in c.CObfuscator.TOKEN_PATTERN.finditer(f"x={literal};")]
+    assert literal in tokens

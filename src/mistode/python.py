@@ -19,16 +19,16 @@ Python Code Obfuscator - Reliable and Reversible Obfuscation based on AST
 
 import ast
 import base64
+import bisect
 import builtins
 import json
 import keyword
 import tokenize
 import zlib
 from io import StringIO
-from typing import cast
 
 from .core import MappingManager, NameGenerator
-from .encrypt import EncryptionManager
+from .encrypt import EncryptionManager, make_cipher
 from .layout import LayoutEngine
 
 
@@ -98,19 +98,15 @@ class PythonObfuscator:
         self.ignore_set.update(dir(builtins))
         self.ignore_set.add("self")
         self.ignore_set.add("cls")
+        # Entry point referenced by name from outside: console_scripts
+        # (`pkg.mod:main`), `python -m`, and external callers.
+        self.ignore_set.add("main")
 
         self.import_analyzer = ImportAnalyzer()
         self._cached_tree: ast.AST | None = None
         self.preserved_keywords: set[str] = set()
 
-        self.mapping_records: dict[str, str | dict[str, str]] = {
-            "identifier_mapping": {},
-            "docstring_mapping": {},
-            "string_prefixes": {},
-            "quote_types": {},
-            "original_to_unparsed": {},
-            "ordered_identifiers": [],
-        }
+        self.identifier_mapping: dict[str, str] = {}
 
     def obfuscate(
         self,
@@ -119,10 +115,14 @@ class PythonObfuscator:
         embed_metadata: bool = True,
         encryption_key: str | None = None,
         source_encoding: str | None = None,
+        cipher: str | None = None,
     ) -> str:
-        # Initialize encryption manager if key is provided
+        # None means "auto": encrypt when a password was supplied. An
+        # explicit value always wins.
+        if cipher is None:
+            cipher = "stream" if encryption_key else "none"
         encryption_manager = (
-            EncryptionManager(encryption_key) if encryption_key else None
+            make_cipher(cipher, encryption_key) if cipher != "none" else None
         )
 
         self.mm.source_encoding = source_encoding
@@ -132,22 +132,17 @@ class PythonObfuscator:
 
         self.import_analyzer.analyze(tree)
 
-        # Collect all keyword arguments used in calls to prevent obfuscating
-        # external APIs
+        # Call keyword names are external API contract.
         self._collect_preserved_keywords(tree)
         self._collect_all_exports(tree)
 
-        # Collect replacements for identifiers based on AST analysis
+        # Map (line, column) -> new name for every obfuscatable identifier.
         replacements = self._collect_replacements(tree, source_code)
 
-        # Generate obfuscated code and layout data using token stream transformation
         layout_engine = LayoutEngine()
         obfuscated_code = layout_engine.obfuscate_token_stream(
             source_code, replacements, encryption_manager
         )
-
-        # Save layout data - NO LONGER NEEDED as it is interleaved
-        # self.mapping_records["layout_data"] = ...
 
         if embed_metadata:
             metadata_comment = self._generate_metadata_comment(encryption_manager)
@@ -181,12 +176,7 @@ class PythonObfuscator:
                 self.ignore_set.add(node.name)
 
     def _collect_all_exports(self, tree: ast.AST) -> None:
-        """
-        Collect names declared in module-level `__all__` lists.
-
-        These are the module's public contract and must keep their original
-        names so `from module import *` (and external imports) keep working.
-        """
+        """Protect module-level `__all__`: it is the public API contract."""
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for target in node.targets:
@@ -219,6 +209,9 @@ class PythonObfuscator:
                 self.obfuscator = obfuscator
                 self.tokens = tokens
                 self.lines = source_code.splitlines()
+                # Tokens and their start lines are in source order, so
+                # definition lookup binary-searches instead of rescanning.
+                self.token_lines = [tok.start[0] for tok in tokens]
 
             def _should_obfuscate(self, name: str) -> bool:
                 return (
@@ -233,7 +226,7 @@ class PythonObfuscator:
                 """
                 Convert an AST column (a UTF-8 byte offset) to the character
                 offset used by tokenize, so multibyte characters (e.g. CJK)
-                don't shift replacement positions.
+                do not shift replacement positions.
                 """
                 if lineno > len(self.lines):
                     return byte_col
@@ -260,43 +253,21 @@ class PythonObfuscator:
                 Skips decorators, looks for 'def'/'class' keyword then the name.
                 """
                 # Find start index in tokens (approximate binary search or scan)
-                start_idx = 0
-                for i, tok in enumerate(self.tokens):
-                    if tok.start[0] >= node_lineno:
-                        start_idx = i
-                        break
+                start_idx = bisect.bisect_left(self.token_lines, node_lineno)
 
                 # Scan forward
-                state = (
-                    "search_keyword"  # search_keyword -> found_keyword -> found_name
-                )
-                # Keyword to look for
                 target_keyword = "class" if is_class else "def"
+                found_keyword = False
 
                 for i in range(start_idx, len(self.tokens)):
                     tok = self.tokens[i]
-                    if tok.type == tokenize.NAME:
-                        if state == "search_keyword":
-                            if tok.string == target_keyword:
-                                state = "found_keyword"
-                            elif tok.string == "async" and is_async and not is_class:
-                                pass  # Found async, next should be def
-                            # Else it might be a decorator name or something, skip
-                        elif state == "found_keyword":
-                            if tok.string == name:
-                                # Found exactly the name we want
-                                return tok.start
-                            # If we hit another keyword or unexpected token?
-                            # Example: def foo ( ...
-                            # 'foo' is NAME.
-                            pass
-                    elif tok.type == tokenize.OP:
-                        pass  # punctuation
-
-                    # Safety break if we go too far?
-                    # E.g. next definition starts?
-                    # But nested definitions exist.
-                    # Just rely on finding the specific name soon after keyword.
+                    if tok.type != tokenize.NAME:
+                        continue
+                    if not found_keyword:
+                        if tok.string == target_keyword:
+                            found_keyword = True
+                    elif tok.string == name:
+                        return tok.start
 
                 return None
 
@@ -386,11 +357,9 @@ class PythonObfuscator:
 
             def visit_ClassDef(self, node):  # noqa: C901
                 self.obfuscator.known_class_names.add(node.name)
-                # Class-level names referenced via `Class.attr` must stay
-                # original (attribute access is never renamed), except for
-                # method names that project analysis proved obfuscatable
-                # (their `self.method`/`ClassName.method` sites are renamed
-                # in tandem by visit_Attribute).
+                # `Class.attr` names stay original (attribute access is
+                # never renamed), except methods proven obfuscatable - their
+                # call sites are renamed together.
                 for stmt in node.body:
                     if isinstance(stmt, ast.Assign):
                         for target in stmt.targets:
@@ -475,29 +444,16 @@ class PythonObfuscator:
         return replacements
 
     def _generate_obfuscated_name(self, original: str) -> str:
-        identifier_map: dict[str, str] = cast(
-            dict[str, str], self.mapping_records["identifier_mapping"]
-        )
-
-        if original in identifier_map:
-            return identifier_map[original]
+        if original in self.identifier_mapping:
+            return self.identifier_mapping[original]
 
         obfuscated = self.gen.generate()
-
-        identifier_map[original] = obfuscated
-
+        self.identifier_mapping[original] = obfuscated
         return obfuscated
 
     def _get_mapping_info(self) -> dict:
-        """
-        Get complete mapping information
-        """
         return {
-            "identifier_mapping": self.mapping_records["identifier_mapping"],
-            "docstring_mapping": self.mapping_records["docstring_mapping"],
-            "string_prefixes": self.mapping_records["string_prefixes"],
-            "quote_types": self.mapping_records["quote_types"],
-            "original_to_unparsed": self.mapping_records["original_to_unparsed"],
+            "identifier_mapping": self.identifier_mapping,
             "source_encoding": self.mm.source_encoding,
         }
 
@@ -511,25 +467,26 @@ class PythonObfuscator:
         if encryption_manager:
             encoded = encryption_manager.encrypt(compressed)
             return f"#@mistode:secure_metadata:{encoded}"
-        else:
-            encoded = base64.b64encode(compressed).decode("ascii")
-            return f"#@mistode:metadata:{encoded}"
+        encoded = base64.b64encode(compressed).decode("ascii")
+        return f"#@mistode:metadata:{encoded}"
 
     def _extract_metadata_from_code(
         self, code: str, encryption_manager: EncryptionManager | None = None
     ) -> dict | None:
         for line in code.splitlines():
-            if encryption_manager and line.startswith("#@mistode:secure_metadata:"):
+            if line.startswith("#@mistode:secure_metadata:"):
+                if not encryption_manager:
+                    raise ValueError(
+                        "File is encrypted: provide --password and the "
+                        "matching --cipher (default: stream)"
+                    )
+                encoded = line.split(":", 2)[2].strip()
+                compressed = encryption_manager.decrypt(encoded)
+                json_str = zlib.decompress(compressed).decode("utf-8")
+                return json.loads(json_str)
+            if line.startswith("#@mistode:metadata:"):
+                encoded = line.split(":", 2)[2].strip()
                 try:
-                    encoded = line.split(":", 2)[2].strip()
-                    compressed = encryption_manager.decrypt(encoded)
-                    json_str = zlib.decompress(compressed).decode("utf-8")
-                    return json.loads(json_str)
-                except Exception:
-                    return None
-            elif not encryption_manager and line.startswith("#@mistode:metadata:"):
-                try:
-                    encoded = line.split(":", 2)[2].strip()
                     compressed = base64.b64decode(encoded)
                     json_str = zlib.decompress(compressed).decode("utf-8")
                     return json.loads(json_str)
@@ -547,17 +504,22 @@ class PythonObfuscator:
         mapping_file: str | None = None,
         obfuscated_code: str | None = None,
         encryption_key: str | None = None,
+        cipher: str | None = None,
     ) -> str:
         mapping_info = {}
+        if cipher is None:
+            cipher = "stream" if encryption_key else "none"
         encryption_manager = (
-            EncryptionManager(encryption_key) if encryption_key else None
+            make_cipher(cipher, encryption_key) if cipher != "none" else None
         )
 
         if mapping_file:
             with open(mapping_file, "r", encoding="utf-8") as f:
                 mapping_info = json.load(f)
 
-        if obfuscated_code and not mapping_info:
+        # An empty mapping from a key file is unusable; fall back to the
+        # embedded metadata rather than silently restoring nothing.
+        if obfuscated_code and not mapping_info.get("identifier_mapping"):
             extracted = self._extract_metadata_from_code(
                 obfuscated_code, encryption_manager
             )
@@ -584,27 +546,16 @@ class PythonObfuscator:
         identifier_mapping = mapping_info.get("identifier_mapping", {})
         reverse_mapping = {v: k for k, v in identifier_mapping.items()}
 
-        # Strip metadata comment if present in the restoration input
-        # The LayoutEngine expects clean obfuscated code (or code matching
-        # the layout data exactly)
-        # However, obfuscate() appended metadata after the code.
-        # We need to remove the appended metadata part.
-
+        # LayoutEngine expects the code without the metadata footer.
+        # Match the metadata markers exactly: the bare "#@mistode:" prefix
+        # also matches interleaved chunks, truncating at offset 0.
         clean_obfuscated_code = obfuscated_code
-        if "#@mistode:" in obfuscated_code:
-            # find the index
-            idx = obfuscated_code.find("\n\n#@mistode:")
+        for marker in ("#@mistode:metadata:", "#@mistode:secure_metadata:"):
+            idx = obfuscated_code.rfind(marker)
             if idx != -1:
-                clean_obfuscated_code = obfuscated_code[:idx]
-            else:
-                # Try other format?
-                idx = obfuscated_code.find("#@mistode:")
-                if idx != -1:
-                    # If it was at start of line
-                    clean_obfuscated_code = obfuscated_code[:idx].rstrip()
+                clean_obfuscated_code = obfuscated_code[:idx].rstrip()
+                break
 
-        # Restore using LayoutEngine (Token Stream Restoration)
-        # layout_data = mapping_info.get("layout_data", "") # Not used anymore
         layout_engine = LayoutEngine()
         restored_code = layout_engine.restore_token_stream(
             clean_obfuscated_code, reverse_mapping, encryption_manager

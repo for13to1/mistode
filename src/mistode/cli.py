@@ -14,7 +14,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
-import ast
 import json
 import sys
 from dataclasses import dataclass
@@ -23,6 +22,14 @@ from pathlib import Path
 
 from .c import CObfuscator
 from .core import MappingManager, NameGenerator
+from .encrypt import derive_seed
+from .project import (
+    ProjectAnalyzer,
+    collect_asset_files,
+    collect_source_files,
+    copy_assets,
+    is_python_file,
+)
 from .python import PythonObfuscator
 
 
@@ -37,9 +44,7 @@ class Language(Enum):
 
 
 class CLIError(Exception):
-    """
-    CLI Error Base Class
-    """
+    """Base class for errors reported without a traceback."""
 
     pass
 
@@ -65,32 +70,40 @@ class Options:
     output_file: Path | None = None
     key_file: Path | None = None
     password: str | None = None
+    cipher: str | None = None
     seed: int | None = None
     style: str = "similar"
     length: int = 16
     language: Language = Language.PYTHON
     stats: bool = False
     aggressive_methods: bool = False
+    assets: str = "copy"  # copy | skip | list
+    assets_skip_secrets: bool = False
 
 
 class ObfuscationService:
     def __init__(self, options: Options):
         self.options = options
         self.mm = MappingManager()
-        # If seed is not provided but password is, derive seed from password
+        # Without --seed, the password also seeds identifier generation so
+        # repeated runs produce the same output.
         seed = options.seed
         if seed is None and options.password:
-            # Deterministic seed from password for consistent obfuscation
-            import hashlib
-
-            seed = int.from_bytes(
-                hashlib.sha256(options.password.encode()).digest()[:8], "big"
-            )
+            seed = derive_seed(options.password)
 
         self.gen = NameGenerator(length=options.length, style=options.style, seed=seed)
         self.stats_data = {}
 
     def execute(self) -> None:
+        if (
+            self.options.command == Command.OBFUSCATE
+            and self.options.cipher not in (None, "none")
+            and not self.options.password
+        ):
+            raise ObfuscationError(
+                f"❌ Error: --cipher {self.options.cipher} requires --password.\n"
+                "💡 Hint: add --password, or use --cipher none for plain payloads."
+            )
         if self.options.command == Command.OBFUSCATE:
             self._obfuscate()
         else:
@@ -107,7 +120,19 @@ class ObfuscationService:
 
         obfuscator: PythonObfuscator | CObfuscator
         if options.language == Language.PYTHON:
-            obfuscator = PythonObfuscator(self.mm, self.gen, options.input_file.name)
+            # Method renaming is opt-in and uses the same receiver proof
+            # as directory mode.
+            methods = (
+                self._analyzer().collect_obfuscatable_methods([options.input_file])
+                if options.aggressive_methods
+                else set()
+            )
+            obfuscator = PythonObfuscator(
+                self.mm,
+                self.gen,
+                options.input_file.name,
+                obfuscatable_methods=methods,
+            )
             key_path = str(options.key_file) if options.key_file else None
             try:
                 result = obfuscator.obfuscate(
@@ -115,6 +140,7 @@ class ObfuscationService:
                     key_path,
                     encryption_key=options.password,
                     source_encoding=encoding,
+                    cipher=options.cipher,
                 )
             except SyntaxError as e:
                 raise ObfuscationError(
@@ -122,26 +148,31 @@ class ObfuscationService:
                 )
         else:
             obfuscator = CObfuscator(self.mm, self.gen, options.input_file.name)
-            result = obfuscator.obfuscate(content, source_encoding=encoding)
+            try:
+                result = obfuscator.obfuscate(
+                    content,
+                    source_encoding=encoding,
+                    source_dir=options.input_file.parent,
+                    encryption_key=options.password,
+                    cipher=options.cipher,
+                )
+            except ValueError as e:
+                raise ObfuscationError(f"❌ Error: {e}")
 
         assert options.output_file is not None
-        # The obfuscated file is always written as UTF-8 so it stays
-        # executable/compilable; the original encoding is stored in the
-        # metadata for bit-perfect restoration.
+        # Output is always UTF-8 so it runs anywhere; the original encoding
+        # travels in the metadata for byte-identical restoration.
         self._write_file(options.output_file, result)
-        self._register_output_file(options.input_file.name, options.output_file.name)
 
-        # Collect statistics
         if options.stats:
             self._collect_obfuscation_stats(content, result, obfuscator)
 
         self._print_success(f"Obfuscated {options.input_file} -> {options.output_file}")
         if options.key_file:
-            self.mm.save_mapping(options.key_file)
+            # Python already wrote it; self.mm would be empty.
+            if options.language == Language.C:
+                self.mm.save_mapping(options.key_file)
             self._print_success(f"Key saved to {options.key_file}")
-        elif options.language == Language.C:
-            # C now supports embedded metadata
-            pass
 
         if options.stats:
             self._print_stats()
@@ -166,11 +197,18 @@ class ObfuscationService:
                 )
                 key_path = str(options.key_file) if options.key_file else None
                 result = obfuscator.restore(
-                    key_path, content, encryption_key=options.password
+                    key_path,
+                    content,
+                    encryption_key=options.password,
+                    cipher=options.cipher,
                 )
             else:
                 obfuscator = CObfuscator(self.mm, self.gen, options.input_file.name)
-                result = obfuscator.restore(content)
+                result = obfuscator.restore(
+                    content,
+                    encryption_key=options.password,
+                    cipher=options.cipher,
+                )
         except ValueError as e:
             raise ObfuscationError(str(e))
 
@@ -185,346 +223,40 @@ class ObfuscationService:
         else:
             self._print_success("Key used: Embedded metadata")
 
-    SUPPORTED_EXTS = {".py", ".c", ".h", ".cpp"}
-    SKIP_DIRS = {
-        # Build/artifact output directories (common across Python and C)
-        "build",
-        "dist",
-        "bin",
-        "obj",
-        "out",
-        "target",
-        "CMakeFiles",
-        "Debug",
-        "Release",
-        # Non-hidden virtualenv/package dirs
-        "node_modules",
-        "venv",
-        "env",
-        "__pycache__",
-    }
+    def _read_text(self, path: Path) -> str:
+        return self._read_file(path, self._detect_encoding(path))
 
-    def _in_skipped_dir(self, path: Path, root: Path) -> bool:
-        """True if any path component is hidden (dot-prefixed, covering
-        .git/.venv/.idea/... ) or is a known build/artifact directory."""
-        return any(
-            part.startswith(".") or part in self.SKIP_DIRS
-            for part in path.relative_to(root).parts
+    def _analyzer(self) -> ProjectAnalyzer:
+        root = (
+            self.options.input_file
+            if self.options.input_file.is_dir()
+            else self.options.input_file.parent
         )
+        return ProjectAnalyzer(root, self._read_text)
 
-    def _collect_source_files(self, directory: Path) -> list[Path]:
-        """Recursively collect supported source files under a directory,
-        skipping hidden, virtualenv, and build/artifact directories."""
-        return sorted(
-            p
-            for p in directory.rglob("*")
-            if p.is_file()
-            and p.suffix.lower() in self.SUPPORTED_EXTS
-            and not self._in_skipped_dir(p, directory)
-        )
+    def _handle_assets(self, out_dir: Path) -> None:
+        """Copy (or report) non-source files so the obfuscated tree stays a
+        runnable, self-contained deliverable."""
+        mode = self.options.assets
+        if mode == "skip":
+            return
 
-    def _language_for_file(self, path: Path) -> Language:
-        return Language.PYTHON if path.suffix.lower() == ".py" else Language.C
+        source_dir = self.options.input_file
+        skip_secrets = self.options.assets_skip_secrets
+        if mode == "list":
+            assets = collect_asset_files(source_dir, skip_secrets)
+            for p in assets:
+                print(f"asset: {p.relative_to(source_dir)}")
+            print(f"({len(assets)} asset file(s); not copied in --assets list mode)")
+            return
 
-    def _collect_module_level_names(self, tree: ast.AST) -> set[str]:  # noqa: C901
-        """Collect definitions in module scope, including those nested in
-        `if`/`try`/`with` blocks (still module scope), but not inside
-        function or class bodies."""
-        names: set[str] = set()
-
-        def visit(stmts):
-            for stmt in stmts:
-                if isinstance(
-                    stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-                ):
-                    names.add(stmt.name)
-                elif isinstance(stmt, ast.Assign):
-                    for target in stmt.targets:
-                        if isinstance(target, ast.Name):
-                            names.add(target.id)
-                elif isinstance(stmt, ast.AnnAssign) and isinstance(
-                    stmt.target, ast.Name
-                ):
-                    names.add(stmt.target.id)
-                elif isinstance(
-                    stmt,
-                    (ast.If, ast.For, ast.While, ast.With, ast.AsyncFor, ast.AsyncWith),
-                ):
-                    visit(stmt.body)
-                    visit(stmt.orelse)
-                elif isinstance(stmt, ast.Try):
-                    visit(stmt.body)
-                    for handler in stmt.handlers:
-                        visit(handler.body)
-                    visit(stmt.orelse)
-                    visit(stmt.finalbody)
-
-        visit(tree.body)
-        return names
-
-    def _collect_all_exports(self, tree: ast.AST) -> set[str]:
-        """Collect names declared in a module's `__all__`, including
-        `__all__ += (...)` appends (possibly inside `if`/`try` blocks).
-        These are the module's true public API."""
-        exports: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Assign, ast.AugAssign)):
-                targets = (
-                    node.targets if isinstance(node, ast.Assign) else [node.target]
-                )
-                if any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
-                    value = node.value
-                    if isinstance(value, (ast.List, ast.Tuple)):
-                        for elt in value.elts:
-                            if isinstance(elt, ast.Constant) and isinstance(
-                                elt.value, str
-                            ):
-                                exports.add(elt.value)
-        return exports
-
-    def _get_public_names(self, tree: ast.AST) -> set[str]:
-        """Names a `from mod import *` would import: the module's `__all__`
-        if declared, otherwise its non-underscore module-level definitions."""
-        exports = self._collect_all_exports(tree)
-        if exports:
-            return exports
-        return {
-            n for n in self._collect_module_level_names(tree) if not n.startswith("_")
-        }
-
-    def _collect_cross_file_imports(self, files: list[Path]) -> set[str]:  # noqa: C901
-        """
-        Python project mode: every name that is part of the project's
-        cross-module surface and therefore must keep its original spelling:
-
-        - `from X import name` bindings
-        - star-import targets: the names `from X import *` would expose
-          (X's `__all__`, or its public module-level definitions)
-        - module names bound by `import X.Y` / star imports (e.g. `mod` in
-          `mod.__all__`)
-
-        Module-level names that are *not* exported or referenced stay
-        obfuscatable.
-        """
-        imported: set[str] = set()
-
-        def module_name(path: Path) -> str:
-            root = (
-                self.options.input_file
-                if self.options.input_file.is_dir()
-                else self.options.input_file.parent
-            )
-            rel = path.relative_to(root)
-            parts = list(rel.parts)
-            if path.name == "__init__.py":
-                parts.pop()
-            elif parts:
-                parts[-1] = path.stem
-            return ".".join(parts)
-
-        file_by_module = {module_name(f): f for f in files}
-
-        for f in files:
-            if self._language_for_file(f) != Language.PYTHON:
-                continue
-            try:
-                encoding = self._detect_encoding(f)
-                tree = ast.parse(self._read_file(f, encoding))
-            except OSError, UnicodeDecodeError, SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom):
-                    for alias in node.names:
-                        if alias.name == "*":
-                            # `from .mod import *` binds `mod` itself and
-                            # exposes mod's public names
-                            if node.module:
-                                mod = node.module.split(".")[-1]
-                                imported.add(mod)
-                                # Resolve relative star-import target
-                                if node.level > 0:
-                                    target = self._resolve_relative_module(
-                                        f, node.module, node.level
-                                    )
-                                    target_file = file_by_module.get(target)
-                                    if target_file:
-                                        try:
-                                            target_tree = ast.parse(
-                                                self._read_file(
-                                                    target_file,
-                                                    self._detect_encoding(target_file),
-                                                )
-                                            )
-                                            imported |= self._get_public_names(
-                                                target_tree
-                                            )
-                                        except OSError, UnicodeDecodeError, SyntaxError:
-                                            pass
-                        else:
-                            imported.add(alias.name)
-            # `import X.Y` binds the top-level name X; `from X import *`
-            # binds X as well (used as `X.__all__`)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        imported.add(alias.name.split(".")[0])
-        return imported
-
-    def _resolve_relative_module(
-        self, from_file: Path, module: str | None, level: int
-    ) -> str:
-        """
-        Resolve a relative import (`from .mod import *`, `from ..pkg.mod
-        import *`) to an absolute module name within the project.
-        """
-        rel = from_file.relative_to(self.options.input_file)
-        parts = list(rel.parts)
-        if from_file.name == "__init__.py":
-            base = parts[:-1]
-        else:
-            base = parts[:-1]
-        # level=1: current package; level=2: parent package, etc.
-        base = base[: len(base) - (level - 1)]
-        if module:
-            base += module.split(".")
-        return ".".join(base)
-
-    def _collect_obfuscatable_methods(self, files: list[Path]) -> set[str]:  # noqa: C901
-        """
-        Python project mode: class method names that may be renamed.
-
-        A method is only safe to rename if every `X.method` attribute
-        access across the project has a known receiver: `self` (inside
-        the class) or the class name itself. Any access on a variable of
-        unknown type blocks the method.
-        """
-        class_methods: dict[str, set[str]] = {}
-        trees: list[ast.AST] = []
-        for f in files:
-            if self._language_for_file(f) != Language.PYTHON:
-                continue
-            try:
-                encoding = self._detect_encoding(f)
-                tree = ast.parse(self._read_file(f, encoding))
-            except OSError, UnicodeDecodeError, SyntaxError:
-                continue
-            trees.append(tree)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    methods = {
-                        stmt.name
-                        for stmt in node.body
-                        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    }
-                    if methods:
-                        class_methods[node.name] = methods
-
-        blocked: set[str] = set()
-        for tree in trees:
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute):
-                    receiver = node.value
-                    # Safe receivers: `self` or a known class name directly
-                    safe = isinstance(receiver, ast.Name) and (
-                        receiver.id == "self" or receiver.id in class_methods
-                    )
-                    if safe:
-                        continue
-                    # Anything else - including chained receivers such as
-                    # `self.parser.add_argument` - is an unknown object
-                    for methods in class_methods.values():
-                        if node.attr in methods:
-                            blocked.add(node.attr)
-
-        all_methods: set[str] = set()
-        for methods in class_methods.values():
-            all_methods |= methods
-        return all_methods - blocked
-
-    def _collect_cross_file_keywords(self, files: list[Path]) -> set[str]:
-        """
-        Python project mode: argument names passed as keyword arguments
-        anywhere in the project. A function's parameter may be referenced
-        as a keyword in a *different* file, so every such name must keep
-        its original spelling across all files.
-        """
-        keywords: set[str] = set()
-        for f in files:
-            if self._language_for_file(f) != Language.PYTHON:
-                continue
-            try:
-                encoding = self._detect_encoding(f)
-                tree = ast.parse(self._read_file(f, encoding))
-            except OSError, UnicodeDecodeError, SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    for kw in node.keywords:
-                        if kw.arg:
-                            keywords.add(kw.arg)
-        return keywords
-
-    def _collect_cross_file_attributes(self, files: list[Path]) -> set[str]:
-        """
-        Python project mode: attribute names accessed as `X.attr` anywhere.
-        Since attribute access is never renamed, any definition reachable
-        via `module.attr` must keep its original name in every file.
-        """
-        attrs: set[str] = set()
-        for f in files:
-            if self._language_for_file(f) != Language.PYTHON:
-                continue
-            try:
-                encoding = self._detect_encoding(f)
-                tree = ast.parse(self._read_file(f, encoding))
-            except OSError, UnicodeDecodeError, SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-                    attrs.add(node.attr)
-        return attrs
-
-    def _collect_cross_file_symbols(self, files: list[Path]) -> set[str]:
-        """
-        C project mode: identifiers *defined* in one file and appearing in
-        at least two files (e.g. via a shared header). These are shared
-        across compilation units and must keep their original names in
-        every file so the project still links.
-        """
-        scanner = CObfuscator(self.mm, self.gen, "scan")
-        defined_per_file: dict[Path, set[str]] = {}
-        all_ids_per_file: dict[Path, set[str]] = {}
-        for f in files:
-            if self._language_for_file(f) != Language.C:
-                continue
-            try:
-                encoding = self._detect_encoding(f)
-                content = self._read_file(f, encoding)
-            except OSError, UnicodeDecodeError:
-                continue
-            defined_per_file[f] = scanner._scan_defined_symbols(content)
-            all_ids_per_file[f] = {
-                m.group(3) for m in scanner._tokenize(content) if m.group(3)
-            }
-
-        occurrences: dict[str, int] = {}
-        for syms in all_ids_per_file.values():
-            for sym in syms:
-                occurrences[sym] = occurrences.get(sym, 0) + 1
-
-        any_defined: set[str] = set()
-        for syms in defined_per_file.values():
-            any_defined |= syms
-
-        return {
-            sym
-            for sym, count in occurrences.items()
-            if count >= 2 and sym in any_defined
-        }
+        copied = copy_assets(source_dir, out_dir, skip_secrets)
+        if copied:
+            self._print_success(f"Copied {copied} non-source asset file(s)")
 
     def _obfuscate_directory(self) -> None:
         options = self.options
-        files = self._collect_source_files(options.input_file)
+        files = collect_source_files(options.input_file)
         if not files:
             raise ObfuscationError(
                 f"❌ Error: No supported source files (.py/.c/.h/.cpp) "
@@ -534,19 +266,20 @@ class ObfuscationService:
         out_dir = options.output_file
         assert out_dir is not None
 
-        # Cross-file analysis so references between files stay intact
-        python_imports = self._collect_cross_file_imports(files)
-        python_keywords = self._collect_cross_file_keywords(files)
-        python_attrs = self._collect_cross_file_attributes(files)
+        analyzer = self._analyzer()
+        # Preserve everything that is referenced across files.
+        python_imports = analyzer.collect_cross_file_imports(files)
+        python_keywords = analyzer.collect_cross_file_keywords(files)
+        python_attrs = analyzer.collect_cross_file_attributes(files)
         # Method renaming is opt-in: it is only provably safe for
         # self-contained code, since external callers of a library's
         # methods are invisible to static analysis.
         python_methods = (
-            self._collect_obfuscatable_methods(files)
+            analyzer.collect_obfuscatable_methods(files)
             if options.aggressive_methods
             else set()
         )
-        c_shared = self._collect_cross_file_symbols(files)
+        c_shared = analyzer.collect_cross_file_symbols(files)
 
         for f in files:
             rel = f.relative_to(options.input_file)
@@ -554,18 +287,16 @@ class ObfuscationService:
             encoding = self._detect_encoding(f)
             content = self._read_file(f, encoding)
 
-            if self._language_for_file(f) == Language.PYTHON:
+            if is_python_file(f):
                 obfuscator = PythonObfuscator(
                     self.mm,
                     self.gen,
                     f.name,
                     obfuscatable_methods=python_methods,
                 )
-                # Names imported elsewhere / used as keywords / accessed
-                # as attributes elsewhere in the project must not change.
-                # Methods proven obfuscatable are exempt from the attribute
-                # preservation (their self/class call sites are renamed in
-                # tandem).
+                # Cross-module names must keep their spelling; provably
+                # local methods are exempt because their call sites are
+                # renamed together.
                 obfuscator.ignore_set.update(python_imports)
                 obfuscator.ignore_set.update(python_attrs - python_methods)
                 obfuscator.preserved_keywords.update(python_keywords)
@@ -574,20 +305,36 @@ class ObfuscationService:
                         content,
                         encryption_key=options.password,
                         source_encoding=encoding,
+                        cipher=options.cipher,
                     )
                 except SyntaxError as e:
                     raise ObfuscationError(
                         f"❌ Error: Failed to parse {f}\n💡 Details: {e}"
                     )
+                # Fold the per-file mapping into MappingManager so a
+                # project-wide key can be written once at the end.
+                self.mm.mapping.update(obfuscator.identifier_mapping)
             else:
                 obfuscator = CObfuscator(self.mm, self.gen, f.name)
                 # Symbols shared across files must keep their names
-                result = obfuscator.obfuscate(
-                    content,
-                    source_encoding=encoding,
-                    extra_whitelisted=c_shared,
-                )
+                try:
+                    result = obfuscator.obfuscate(
+                        content,
+                        source_encoding=encoding,
+                        extra_whitelisted=c_shared,
+                        source_dir=f.parent,
+                        encryption_key=options.password,
+                        cipher=options.cipher,
+                    )
+                except ValueError as e:
+                    raise ObfuscationError(f"❌ Error: {e}")
             self._write_file(out, result)
+
+        self._handle_assets(out_dir)
+
+        if options.key_file:
+            self.mm.save_mapping(options.key_file)
+            self._print_success(f"Key saved to {options.key_file}")
 
         self._print_success(
             f"Obfuscated {options.input_file} -> {out_dir} ({len(files)} files)"
@@ -595,7 +342,7 @@ class ObfuscationService:
 
     def _restore_directory(self) -> None:
         options = self.options
-        files = self._collect_source_files(options.input_file)
+        files = collect_source_files(options.input_file)
         if not files:
             raise ObfuscationError(
                 f"❌ Error: No source files found in {options.input_file}"
@@ -604,6 +351,13 @@ class ObfuscationService:
         out_dir = options.output_file
         assert out_dir is not None
 
+        if options.key_file:
+            raise ObfuscationError(
+                "❌ Error: --key is not supported in project (directory) mode.\n"
+                "💡 Hint: restore from embedded metadata, or restore files "
+                "individually with their key."
+            )
+
         for f in files:
             rel = f.relative_to(options.input_file)
             out = out_dir / rel
@@ -611,19 +365,30 @@ class ObfuscationService:
             content = self._read_file(f, encoding)
 
             try:
-                if self._language_for_file(f) == Language.PYTHON:
+                if is_python_file(f):
                     obfuscator = PythonObfuscator(self.mm, self.gen, f.name)
                     result = obfuscator.restore(
-                        None, content, encryption_key=options.password
+                        None,
+                        content,
+                        encryption_key=options.password,
+                        cipher=options.cipher,
                     )
                 else:
                     obfuscator = CObfuscator(self.mm, self.gen, f.name)
-                    result = obfuscator.restore(content)
+                    result = obfuscator.restore(
+                        content,
+                        encryption_key=options.password,
+                        cipher=options.cipher,
+                    )
             except ValueError as e:
                 raise ObfuscationError(str(e))
 
             restore_encoding = obfuscator.mm.source_encoding or encoding
             self._write_file(out, result, restore_encoding)
+
+        # Assets were mirrored into the obfuscated tree; bring them back so
+        # the restored project is complete again.
+        self._handle_assets(out_dir)
 
         self._print_success(
             f"Restored {options.input_file} -> {out_dir} ({len(files)} files)"
@@ -741,9 +506,6 @@ class ObfuscationService:
                 f"❌ Error: Failed to load key file {key_file}\n💡 Details: {e}"
             )
 
-    def _register_output_file(self, original_name: str, output_name: str) -> None:
-        self.mm.register_file(original_name, output_name)
-
     def _print_success(self, message: str) -> None:
         print(f"OK {message}")
 
@@ -752,11 +514,10 @@ class ObfuscationService:
     ) -> None:
         """Collect statistics about the obfuscation process"""
 
-        # Count identifiers
-        # PythonObfuscator tracks its own mapping in mapping_records,
-        # while CObfuscator uses MappingManager.mapping directly.
-        if hasattr(obfuscator, "mapping_records"):
-            total_identifiers = len(obfuscator.mapping_records["identifier_mapping"])
+        # PythonObfuscator keeps its mapping on the instance;
+        # CObfuscator uses MappingManager directly.
+        if isinstance(obfuscator, PythonObfuscator):
+            total_identifiers = len(obfuscator.identifier_mapping)
         else:
             total_identifiers = len(self.mm.mapping)
         preserved_count = 0
@@ -854,7 +615,7 @@ class ArgumentParser:
                         if "tool" in data and "mistode" in data["tool"]:
                             config = data["tool"]["mistode"]
                 except Exception:
-                    # If config file is invalid, just skip it
+                    # Unreadable or malformed config is ignored.
                     pass
                 break
 
@@ -879,6 +640,16 @@ class ArgumentParser:
             "--password", "-p", "--pwd", help="Password for encryption/decryption"
         )
         obf.add_argument("--seed", "-s", type=int, help="Random seed")
+        obf.add_argument(
+            "--cipher",
+            choices=["none", "stream"],
+            default=None,
+            help=(
+                "Payload cipher used when a password is given: 'stream' "
+                "(default, authenticated) or 'none'. Without --password "
+                "payloads are always plain base64."
+            ),
+        )
         obf.add_argument(
             "--style",
             choices=["similar", "random"],
@@ -910,6 +681,26 @@ class ArgumentParser:
             ),
         )
 
+        obf.add_argument(
+            "--assets",
+            choices=["copy", "skip", "list"],
+            default=None,
+            help=(
+                "Project mode: whether to copy non-source files (templates, "
+                "data, configs). copy (default) includes them so the result "
+                "stays runnable; skip ignores them; list only reports what "
+                "would be copied."
+            ),
+        )
+        obf.add_argument(
+            "--assets-skip-secrets",
+            action="store_true",
+            help=(
+                "Skip credential-looking files (.env, *.pem, *.key...) when "
+                "copying; they are included by default."
+            ),
+        )
+
     def _add_restore_command(self, subparsers) -> None:
         res = subparsers.add_parser(
             "restore", aliases=["r", "res"], help="Restore an obfuscated file"
@@ -924,6 +715,12 @@ class ArgumentParser:
             "--stats",
             action="store_true",
             help="Display restoration statistics",
+        )
+        res.add_argument(
+            "--cipher",
+            choices=["none", "stream"],
+            default=None,
+            help="Payload cipher (must match the one used to obfuscate)",
         )
 
     def parse(self, args=None) -> Options:
@@ -940,7 +737,7 @@ class ArgumentParser:
 
         language = self._detect_language(ext)
         output_file = self._resolve_output_path(input_path, raw.out, cmd)
-        key_file = self._resolve_key_path(input_path, raw.key, cmd, language)
+        key_file = self._resolve_key_path(input_path, raw.key, cmd)
 
         return Options(
             command=cmd,
@@ -956,6 +753,11 @@ class ArgumentParser:
                 raw.password
                 if hasattr(raw, "password")
                 else config.get("password", None)
+            ),
+            cipher=(
+                raw.cipher
+                if hasattr(raw, "cipher") and raw.cipher is not None
+                else config.get("cipher")
             ),
             style=(
                 raw.style
@@ -977,6 +779,16 @@ class ArgumentParser:
                 raw.aggressive_methods
                 if hasattr(raw, "aggressive_methods") and raw.aggressive_methods
                 else False
+            ),
+            assets=(
+                raw.assets
+                if hasattr(raw, "assets") and raw.assets is not None
+                else config.get("assets", "copy")
+            ),
+            assets_skip_secrets=(
+                True
+                if getattr(raw, "assets_skip_secrets", False)
+                else config.get("assets_skip_secrets", False)
             ),
         )
 
@@ -1027,7 +839,7 @@ class ArgumentParser:
             return parent / f"{stem}.res{input_path.suffix}"
 
     def _resolve_key_path(
-        self, input_path: Path, key: str, cmd: Command, language: Language
+        self, input_path: Path, key: str, cmd: Command
     ) -> Path | None:
 
         if key:
@@ -1039,15 +851,11 @@ class ArgumentParser:
                 fallback = input_path.parent / f"{original_stem}.map.json"
                 if fallback.exists():
                     return fallback
-            # For restore, if no explicit key and no implicit key file found,
-            # return None. The restoration might succeed with embedded metadata
+            # No key file: restoration may still succeed from embedded
+            # metadata.
             return None
 
-        if cmd == Command.OBFUSCATE and language == Language.C:
-            # Reverted: C now supports embedded metadata, so no keyed enforcement needed
-            return None
-
-        # For obfuscate, we only save key if explicitly requested
+        # Obfuscation writes a key only when explicitly requested.
         return None
 
 
@@ -1056,8 +864,10 @@ def run() -> None:
 
     try:
         options = arg_parser.parse()
-    except SystemExit:
-        sys.exit(1)
+    except SystemExit as e:
+        # argparse exits 0 for --help/--version and 2 for usage errors;
+        # only forward its code instead of forcing a failure exit.
+        sys.exit(e.code if isinstance(e.code, int) else 1)
 
     service = ObfuscationService(options)
 

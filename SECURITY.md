@@ -9,30 +9,40 @@ If you discover a security vulnerability, please report it via the following met
 
 ## Response Time
 
-We commit to causing an initial response within 48 hours of receiving a security vulnerability report and providing a solution or update plan within 7 days.
+We aim to respond within 48 hours of a report and to provide a fix or plan within 7 days.
 
 ## Security Best Practices
 
-### Limitations of Code Obfuscation
+### Scope of protection
 
-Please note that the code obfuscation provided by Mistode is primarily for protecting intellectual property and **cannot replace encryption or secure coding practices**:
+Mistode raises the cost of reading code; it does not encrypt the program:
 
 - Obfuscated code can still be reverse-engineered.
-- **Sensitive information in string constants will not be obfuscated** (e.g., API keys, passwords, URLs).
-- Do not rely on obfuscation to protect sensitive information (e.g., passwords, API keys).
-- Obfuscation cannot replace proper authentication and authorization mechanisms.
+- String literals, numbers and control flow stay readable. Never embed
+  secrets (API keys, passwords, URLs) in source.
+- Obfuscation cannot replace authentication or authorization.
 
-### Important Security Warning
+### `--password`
 
-**String Constant Obfuscation Limitations**:
+`--password` protects the restoration payloads (layout chunks and the
+identifier mapping), not the delivered code:
 
-- The current version only obfuscates identifiers (variable names, function names, class names, etc.).
-- **Sensitive information in string constants is not automatically obfuscated**.
-- If your code contains sensitive strings (API keys, database passwords, etc.), please handle them manually or use other encryption methods.
+- The artifact runs without it. Without the password the obfuscated source
+  is still readable, but the original identifiers, comments and formatting
+  cannot be recovered.
+- Payloads use scrypt (N=2^14, r=8, p=1), a per-payload nonce and an
+  HMAC-SHA256 tag. Known plaintext from one line does not unlock the rest,
+  and tampering is detected.
+- The KDF salt is fixed (`mistode-kdf-v1`) so identical inputs stay
+  reproducible. Precomputation is reusable across installations, so use a
+  long, unique, high-entropy passphrase and rotate it per recipient.
+- Payloads from Mistode <= 0.1.3 had no nonce or tag and are rejected;
+  re-obfuscate with the current release.
 
-### Usage Recommendations
+### Usage recommendations
 
-1. **Production Use**: Thoroughly test the obfuscated code before deploying to production.
-2. **Backup Original Code**: Always keep a backup of the original code.
-3. **Version Control**: Include obfuscated code and mapping files in version control.
-4. **Security Audit**: Periodically audit obfuscated code to ensure security.
+1. Test the obfuscated artifact before shipping it.
+2. Keep backups of the original source.
+3. Keep artifacts and `--key` files out of public repositories; a key file
+   is restoration material when no password is used.
+4. Re-audit after upgrading: obfuscated output is not stable across versions.

@@ -177,20 +177,6 @@ class TestObfuscationService:
                 test_file.unlink()
                 test_file.parent.rmdir()
 
-    def test_register_output_file(self):
-        """
-        Test registering output file
-        """
-        options = Options(
-            command=Command.OBFUSCATE,
-            input_file=Path("test.py"),
-            output_file=Path("test.obf.py"),
-            key_file=Path("test.map.json"),
-        )
-        service = ObfuscationService(options)
-        service._register_output_file("test.py", "test.obf.py")
-        assert "test.obf.py" in service.mm.file_mapping
-
     def test_print_success(self):
         """
         Test printing success message
@@ -209,10 +195,10 @@ class TestObfuscationService:
     def test_collect_stats_python_uses_actual_mapping(self):
         """
         Regression: --stats must report the identifiers actually obfuscated.
-        PythonObfuscator tracks its mapping in mapping_records, not in
+        PythonObfuscator keeps its mapping on the instance, not in
         MappingManager.mapping.
         """
-        from src.mistode.python import PythonObfuscator
+        from mistode.python import PythonObfuscator
 
         options = Options(
             command=Command.OBFUSCATE,
@@ -443,7 +429,7 @@ class TestArgumentParser:
         parser = ArgumentParser()
         input_path = Path("test.py")
         key_path = parser._resolve_key_path(
-            input_path, "custom.map.json", Command.OBFUSCATE, Language.PYTHON
+            input_path, "custom.map.json", Command.OBFUSCATE
         )
         assert key_path == Path("custom.map.json")
 
@@ -453,9 +439,7 @@ class TestArgumentParser:
         """
         parser = ArgumentParser()
         input_path = Path("test.py")
-        key_path = parser._resolve_key_path(
-            input_path, None, Command.OBFUSCATE, Language.PYTHON
-        )
+        key_path = parser._resolve_key_path(input_path, None, Command.OBFUSCATE)
         assert key_path is None
 
     def test_resolve_key_path_default_restore(self):
@@ -464,9 +448,7 @@ class TestArgumentParser:
         """
         parser = ArgumentParser()
         input_path = Path("test.obf.py")
-        key_path = parser._resolve_key_path(
-            input_path, None, Command.RESTORE, Language.PYTHON
-        )
+        key_path = parser._resolve_key_path(input_path, None, Command.RESTORE)
         assert key_path is None
 
     def test_resolve_key_path_default_obfuscate_c(self):
@@ -475,9 +457,7 @@ class TestArgumentParser:
         """
         parser = ArgumentParser()
         input_path = Path("test.c")
-        key_path = parser._resolve_key_path(
-            input_path, None, Command.OBFUSCATE, Language.C
-        )
+        key_path = parser._resolve_key_path(input_path, None, Command.OBFUSCATE)
         assert key_path is None
 
 

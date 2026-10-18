@@ -19,30 +19,16 @@ class LayoutEngine:
         replacements: dict[tuple[int, int], str],
         encryption_manager: Any | None = None,
     ) -> str:
-        """
-        Obfuscates the source code by filtering the token stream.
-        Generates interleaved layout comments.
+        """Obfuscate `source_code` and interleave one layout chunk per line.
 
-        Args:
-            source_code: Original source.
-            replacements: Dict mapping (line, col) -> new_name.
-            encryption_manager: Optional manager to encrypt layout chunks.
-
-        Returns:
-            obfuscated_code (with interleaved comments)
+        `replacements` maps (line, character column) to the new identifier.
         """
         source_io = StringIO(source_code)
 
-        # We need to buffer tokens and layout data until we emit a line in
-        # the obfuscated code.
-        # Structure:
-        # [ (layout_entry, token_tuple), (layout_entry, token_tuple), ... ]
-        # When we decide to emit a newline in obfuscated code, we take the
-        # accumulated layout entries, compress/encrypt them, allow the code
-        # line to follow.
-
+        # (token_type, token_string, layout_metadata) for every kept token.
+        # Layout entries accumulate until a newline is emitted, then get
+        # compressed (and optionally encrypted) into one chunk comment.
         kept_tokens: list[tuple[int, str, dict[str, Any]]] = []
-        # list of (token_type, token_string, layout_metadata_for_this_token)
 
         # Buffer for 'skipped' content (whitespace, comments) that precedes
         # the next kept token
@@ -52,29 +38,23 @@ class LayoutEngine:
         logical_line_start = True
         last_newline_empty = False
 
+        # Split once: the gap calculation runs for every token and must not
+        # re-scan the whole source each time.
+        lines = source_code.splitlines(keepends=True)
+
         for tok in tokenize.generate_tokens(source_io.readline):
             token_type = tok.type
             token_string = tok.string
             start_line, start_col = tok.start
             end_line, end_col = tok.end
 
-            # Reset flag on every token, only set it when NEWLINE is processed?
-            # Or just set it when NEWLINE matches.
             if token_type == tokenize.NEWLINE:
                 last_newline_empty = token_string == ""
-                # A newline always means the next token is at the start of
-                # a logical line
                 logical_line_start = True
-            else:
-                # If we see any other token after newline (e.g. DEDENT? ENDMARKER?),
-                # we keep the state if it was the last significant thing.
-                # Actually ENDMARKER comes right after.
-                pass
 
-            # 1. Calc Whitespace/Gap since last token
+            # 1. Gap since the previous token (whitespace, comments, ...)
             gap = ""
             if start_line > prev_end_pos[0]:
-                lines = source_code.splitlines(keepends=True)
                 # Part of prev line
                 if prev_end_pos[0] <= len(lines):
                     gap += lines[prev_end_pos[0] - 1][prev_end_pos[1] :]
@@ -86,9 +66,8 @@ class LayoutEngine:
                 if start_line <= len(lines):
                     gap += lines[start_line - 1][:start_col]
             else:
-                layout_lines = source_code.splitlines(keepends=True)
-                if start_line <= len(layout_lines):
-                    gap += layout_lines[start_line - 1][prev_end_pos[1] : start_col]
+                if start_line <= len(lines):
+                    gap += lines[start_line - 1][prev_end_pos[1] : start_col]
 
             pending_prefix += gap
             prev_end_pos = (end_line, end_col)
@@ -109,25 +88,12 @@ class LayoutEngine:
             ):
                 logical_line_start = True
 
-            # Docstring Obfuscation:
-            # If we are at logical line start and see a string, it is likely
-            # a docstring.
-            # We replace it with an empty string (or minimal) to save
-            # space/secure it, and store the original content in the layout
-            # for restoration.
+            # A string at the start of a logical line is a docstring.
+            # Emit `""` and keep the original text in the layout.
             if logical_line_start and token_type == tokenize.STRING:
-                layout_meta = {
-                    "p": pending_prefix,
-                    "c": token_string,  # Save content for restoration
-                }
+                layout_meta = {"p": pending_prefix, "c": token_string}
                 pending_prefix = ""
-                # Use empty string as obfuscated token
-                # Note: tokenize.untokenize might expect quotes?
-                # If we produce `""`, it's valid.
                 kept_tokens.append((token_type, '""', layout_meta))
-
-                # Consume it from logical line standpoint
-                # (Next token still starts a logical line? No, docstring is a statement)
                 logical_line_start = False
                 continue
 
@@ -156,16 +122,15 @@ class LayoutEngine:
                 layout_meta["nl"] = token_string
             kept_tokens.append((token_type, token_string, layout_meta))
 
-        # Handle trailing layout
+        # Trailing layout and the "no final newline" flag ride on a
+        # synthetic ENDMARKER so restoration can reproduce them.
         if pending_prefix or last_newline_empty:
-            # Attach to a dummy ENDMARKER or just last token?
-            # We can attach to a virtual token
             meta = {"p": pending_prefix}
             if last_newline_empty:
                 meta["no_eof_nl"] = True
             kept_tokens.append((tokenize.ENDMARKER, "", meta))
 
-        # 3. Reconstruct Obfuscated Code with Interleaved Comments
+        # 3. Rebuild the obfuscated code, one chunk comment per line
         output_lines = []
 
         current_line_tokens: list[str] = []
@@ -181,8 +146,7 @@ class LayoutEngine:
 
         for idx, (ttype, tstring, layout_meta) in enumerate(kept_tokens):
             if ttype == tokenize.ENDMARKER:
-                # Just save the layout if there is any important suffix
-                # Typically this is trailing newlines/comments of the file
+                # Trailing layout: end-of-file comments and newlines.
                 if layout_meta:
                     current_line_layouts.append(layout_meta)
                 continue
@@ -191,9 +155,7 @@ class LayoutEngine:
 
             if ttype == tokenize.INDENT:
                 indents.append(tstring)
-                # INDENT changes state but doesn't consume "start of line" for content.
-                # The next token (e.g. NAME) will handle printing the indent.
-
+                # The next token emits the indent; INDENT only updates state.
                 current_line_layouts.append(layout_meta)
                 continue
 
@@ -203,10 +165,7 @@ class LayoutEngine:
                 current_line_layouts.append(layout_meta)
                 continue
             elif ttype in (tokenize.NL, tokenize.NEWLINE):
-                # End of line in Obfuscated Code
                 current_line_layouts.append(layout_meta)
-
-                # Flush current line
                 self._flush_line(
                     output_lines,
                     current_line_tokens,
@@ -214,7 +173,6 @@ class LayoutEngine:
                     encryption_manager,
                 )
 
-                # Reset
                 current_line_tokens = []
                 current_line_layouts = []
                 at_line_start = True
@@ -223,12 +181,10 @@ class LayoutEngine:
             # Normal Token
             current_line_layouts.append(layout_meta)
 
-            # Formatting (Spacing) logic similar to before
-            # Determine if we need space before this token
             prefix_space = ""
 
-            # Track f-string nesting so we can apply f-string-specific
-            # spacing rules to expressions inside the braces.
+            # f-string braces and text stay compact; expressions inside them
+            # use normal spacing.
             in_fstring = fstring_depth > 0
             if ttype == FSTRING_START:
                 fstring_depth += 1
@@ -328,8 +284,9 @@ class LayoutEngine:
         json_bytes = json.dumps(layouts).encode("utf-8")
         compressed = zlib.compress(json_bytes)
 
-        encoded = ""
         if encryption_manager:
+            # `secure_` prefix tells restoration the payload must be
+            # decrypted before base64/zlib decoding.
             encoded = encryption_manager.encrypt(compressed)
             comment = f"#@mistode:secure_chunk:{encoded}"
         else:
@@ -352,35 +309,9 @@ class LayoutEngine:
         """
         result_parts = []
 
-        # We process line by line (or chunk by chunk)
-        # 1. Read layout comment
-        # 2. Read code line
-        # 3. Tokenize code line
-        # 4. Apply layout
-
-        # Since tokenize works best on full stream or line-by-line,
-        # we can iterate lines, check for comment, parse it.
-
+        # Chunks are emitted one per obfuscated line: split them out first,
+        # then tokenize the cleaned code and replay the layouts in order.
         lines = obfuscated_code.splitlines()
-
-        # Tokenizer on the stripped code?
-        # If we just tokenize the whole file, we get tokens.
-        # But we need to sync them with the Layout Chunks.
-        # The Layout Chunks were emitted per *Obfuscated Line*.
-        # So we should iterate the Obfuscated Lines, grab the tokens in
-        # them, apply layout.
-
-        # But `tokenize` might span lines (multi-line strings?).
-        # Our obfuscator construction puts everything on one line unless it
-        # was naturally split by our logic.
-        # But we preserved NEWLINEs as structural, so it should be largely
-        # line-correspondent.
-
-        # Strategy:
-        # Pre-process lines to extract layout chunks map: LineIndex -> LayoutData
-        # Then tokenize the CLEAN code.
-        # As we iterate tokens, check which line they are on, consume
-        # LayoutData for that line.
 
         clean_lines = []
         layout_map = {}  # code_line_idx -> [layout_dicts]
@@ -396,21 +327,25 @@ class LayoutEngine:
                 # Parse Layout
                 try:
                     payload = stripped.split(":", 2)[2]
-                    if (
-                        stripped.startswith("#@mistode:secure_chunk:")
-                        and encryption_manager
-                    ):
+                    if stripped.startswith("#@mistode:secure_chunk:"):
+                        if not encryption_manager:
+                            raise ValueError(
+                                "Encrypted payload: provide --password and "
+                                "the matching --cipher (default: stream)"
+                            )
                         decoded = encryption_manager.decrypt(payload)
                     else:
                         decoded = base64.b64decode(payload)
 
                     decompressed = zlib.decompress(decoded)
                     chunk_layouts = json.loads(decompressed.decode("utf-8"))
-                    # If multiple comment lines appear (rare), extend?
-                    # Our logic emits one comment per code line.
                     current_layout_data.extend(chunk_layouts)
+                except ValueError:
+                    # Cipher failures (missing/wrong password, tampering)
+                    # and malformed payloads must surface, not be reported
+                    # later as "file does not appear to be obfuscated".
+                    raise
                 except Exception:
-                    # Ignore invalid chunks
                     pass
                 continue
 
@@ -426,19 +361,14 @@ class LayoutEngine:
 
         clean_code_base = "\n".join(clean_lines)
 
-        # Validation: If we have code but NO layout found, implementation
-        # assumes it's not a proper mistode obfuscated file
+        # Code without chunks is not a Mistode artifact.
         if clean_code_base.strip() and not layout_map:
             raise ValueError(
                 "File does not appear to be obfuscated (no layout chunks found)."
             )
 
-        # Check for no_eof_nl flag in the last layout chunk (ENDMARKER)
-        # If the flag is present, it means the original file did NOT have
-        # a trailing newline.
-        # Otherwise, implies it DID (or default behavior).
-        # We default to appending \n because splitlines/join eats the final
-        # one.
+        # `no_eof_nl` on the last layout means the source had no trailing
+        # newline; otherwise re-add one (splitlines/join drops it).
 
         append_newline = True
 
@@ -457,14 +387,9 @@ class LayoutEngine:
         else:
             clean_code = clean_code_base
 
-        # Now tokenize clean_code
+        # Flattened in emission order, the layouts line up 1:1 with the
+        # kept tokens of the cleaned code.
         try:
-            # We need a global token index counter per line?
-            # Or just a global queue of layout items?
-            # If we flatten the layout_data from all lines, it should match
-            # the token stream sequence!
-            # Because `kept_tokens` was sequential.
-
             layout_iter = iter(all_layouts)
 
             for tok in tokenize.generate_tokens(StringIO(clean_code).readline):
@@ -496,7 +421,7 @@ class LayoutEngine:
 
                 result_parts.append(content)
 
-        except StopIteration, tokenize.TokenError:
+        except (StopIteration, tokenize.TokenError):
             pass
 
         return "".join(result_parts)

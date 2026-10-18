@@ -38,7 +38,9 @@ class TestCLI:
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0 or result.returncode == 1
+        # --help must exit 0 (argparse SystemExit(0) was previously
+        # swallowed and rewritten to 1, breaking automation probes).
+        assert result.returncode == 0
         assert "obfuscate" in result.stdout
         assert "restore" in result.stdout
 

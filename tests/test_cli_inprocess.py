@@ -84,8 +84,9 @@ class TestCollectSourceFiles:
         (proj / "build" / "CMakeFiles" / "g.c").write_text("int g() { return 0; }\n")
         (proj / "bin" / "stale.c").write_text("int s() { return 0; }\n")
 
-        svc = _svc(Command.OBFUSCATE, proj, tmp_path / "o")
-        files = svc._collect_source_files(proj)
+        from mistode.project import collect_source_files
+
+        files = collect_source_files(proj)
         rel = sorted(str(f.relative_to(proj)) for f in files)
         assert rel == ["real.py", "src/real.c"]
 
@@ -98,7 +99,7 @@ class TestCrossFileAnalysis:
         b.write_text("from . import rel\n")
 
         svc = _svc(Command.OBFUSCATE, a, tmp_path / "o.py")
-        imports = svc._collect_cross_file_imports([a, b])
+        imports = svc._analyzer().collect_cross_file_imports([a, b])
         # `import z` binds the module name z, so it is preserved too
         assert imports == {"helper", "foo", "bar", "rel", "z"}
 
@@ -111,7 +112,7 @@ class TestCrossFileAnalysis:
         m.write_text('#include "util.h"\nint main() { return shared(1, 2); }\n')
 
         svc = _svc(Command.OBFUSCATE, m, tmp_path / "o.c")
-        shared = svc._collect_cross_file_symbols([h, c, m])
+        shared = svc._analyzer().collect_cross_file_symbols([h, c, m])
         assert "shared" in shared
 
 
@@ -210,3 +211,166 @@ class TestCLanguageInProcess:
         _svc(Command.RESTORE, out, res).execute()
         for name in ("util.h", "util.c", "main.c"):
             assert (res / name).read_text() == (proj / name).read_text()
+
+
+class TestKeyFile:
+    """`--key` must contain the real mapping and be usable for restore."""
+
+    def test_key_mapping_is_not_empty(self, tmp_path: Path):
+        src = tmp_path / "a.py"
+        src.write_text("def api(uid):\n    return uid * 2\n", encoding="utf-8")
+        out = tmp_path / "a.obf.py"
+        key = tmp_path / "a.map.json"
+
+        _svc(Command.OBFUSCATE, src, out, key_file=key).execute()
+
+        import json
+
+        data = json.loads(key.read_text(encoding="utf-8"))
+        assert data["identifier_mapping"], "key file must carry the mapping"
+        assert "api" in data["identifier_mapping"]
+
+    def test_restore_from_key_without_embedded_metadata(self, tmp_path: Path):
+        src = tmp_path / "a.py"
+        original = "def api(uid):\n    return uid * 2\n"
+        src.write_text(original, encoding="utf-8")
+        out = tmp_path / "a.obf.py"
+        key = tmp_path / "a.map.json"
+        _svc(Command.OBFUSCATE, src, out, key_file=key).execute()
+
+        # Drop the embedded metadata so the key file is the only source.
+        stripped = "\n".join(
+            line
+            for line in out.read_text(encoding="utf-8").splitlines()
+            if not line.startswith("#@mistode:metadata:")
+        )
+        out.write_text(stripped + "\n", encoding="utf-8")
+
+        restored = tmp_path / "a.res.py"
+        _svc(Command.RESTORE, out, restored, key_file=key).execute()
+        assert restored.read_text(encoding="utf-8") == original
+
+
+class TestAssets:
+    """Project mode must keep the deliverable runnable."""
+
+    def _project(self, tmp_path: Path) -> Path:
+        proj = tmp_path / "proj"
+        (proj / "pkg").mkdir(parents=True)
+        (proj / "data").mkdir()
+        (proj / "pkg" / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (proj / "data" / "conf.json").write_text('{"n": 1}\n', encoding="utf-8")
+        (proj / "data" / "secret.env").write_text("TOKEN=x\n", encoding="utf-8")
+        return proj
+
+    def test_copy_is_default(self, tmp_path: Path):
+        proj = self._project(tmp_path)
+        out = tmp_path / "proj.obf"
+        _svc(Command.OBFUSCATE, proj, out).execute()
+
+        assert (out / "pkg" / "app.py").exists()
+        assert (out / "data" / "conf.json").exists()
+        # Credential-looking files are part of the deliverable by default.
+        assert (out / "data" / "secret.env").exists()
+
+    def test_skip_secrets(self, tmp_path: Path):
+        proj = self._project(tmp_path)
+        out = tmp_path / "proj.obf"
+        _svc(Command.OBFUSCATE, proj, out, assets_skip_secrets=True).execute()
+        assert (out / "data" / "conf.json").exists()
+        assert not (out / "data" / "secret.env").exists()
+
+    def test_skip(self, tmp_path: Path):
+        proj = self._project(tmp_path)
+        out = tmp_path / "proj.obf"
+        _svc(Command.OBFUSCATE, proj, out, assets="skip").execute()
+        assert (out / "pkg" / "app.py").exists()
+        assert not (out / "data" / "conf.json").exists()
+
+    def test_list_does_not_copy(self, tmp_path: Path, capsys):
+        proj = self._project(tmp_path)
+        out = tmp_path / "proj.obf"
+        _svc(Command.OBFUSCATE, proj, out, assets="list").execute()
+
+        assert not (out / "data" / "conf.json").exists()
+        assert "conf.json" in capsys.readouterr().out
+
+
+class TestSingleFileAggressiveMethods:
+    def test_flag_renames_provable_methods(self, tmp_path: Path):
+        src = tmp_path / "m.py"
+        src.write_text(
+            "class A:\n"
+            "    def go(self):\n"
+            "        return self.step()\n"
+            "    def step(self):\n"
+            "        return 3\n",
+            encoding="utf-8",
+        )
+        plain = tmp_path / "plain.py"
+        aggressive = tmp_path / "aggressive.py"
+
+        _svc(Command.OBFUSCATE, src, plain, seed=7).execute()
+        _svc(
+            Command.OBFUSCATE,
+            src,
+            aggressive,
+            seed=7,
+            aggressive_methods=True,
+        ).execute()
+
+        plain_text = plain.read_text(encoding="utf-8")
+        aggressive_text = aggressive.read_text(encoding="utf-8")
+        assert "def step(" in plain_text
+        assert "def step(" not in aggressive_text
+
+
+class TestStarImports:
+    """Star imports must protect the target module's public names."""
+
+    def _run_project(self, tmp_path: Path, files: dict[str, str]) -> Path:
+        proj = tmp_path / "proj"
+        for name, text in files.items():
+            path = proj / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        out = tmp_path / "proj.obf"
+        _svc(Command.OBFUSCATE, proj, out).execute()
+        return out
+
+    def test_absolute_star_import(self, tmp_path: Path):
+        out = self._run_project(
+            tmp_path,
+            {
+                "utils.py": "def helper():\n    return 42\n",
+                "main.py": "from utils import *\nprint(helper())\n",
+            },
+        )
+        assert "def helper(" in (out / "utils.py").read_text(encoding="utf-8")
+
+    def test_package_star_import(self, tmp_path: Path):
+        out = self._run_project(
+            tmp_path,
+            {
+                "pkg/__init__.py": "from .mod import *\n",
+                "pkg/mod.py": "def helper():\n    return 7\n",
+                "main.py": "import pkg\nprint(pkg.helper())\n",
+            },
+        )
+        assert "def helper(" in (out / "pkg" / "mod.py").read_text(encoding="utf-8")
+
+
+class TestRestoreDirectoryAssets:
+    def test_assets_come_back(self, tmp_path: Path):
+        proj = tmp_path / "proj"
+        (proj / "data").mkdir(parents=True)
+        (proj / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (proj / "data" / "conf.json").write_text('{"n": 1}\n', encoding="utf-8")
+
+        obf = tmp_path / "proj.obf"
+        res = tmp_path / "proj.res"
+        _svc(Command.OBFUSCATE, proj, obf).execute()
+        _svc(Command.RESTORE, obf, res).execute()
+
+        assert (res / "data" / "conf.json").read_text(encoding="utf-8") == '{"n": 1}\n'
+        assert (res / "app.py").read_text(encoding="utf-8") == "VALUE = 1\n"

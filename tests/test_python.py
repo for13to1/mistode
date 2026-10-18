@@ -535,3 +535,29 @@ def complex_formatting(  param1  ):
 
         # Verify lossless identity
         assert restored == source_code
+
+
+def test_large_file_obfuscates_in_linear_time():
+    """Guard against re-scanning the source for every token (quadratic)."""
+    import time
+
+    from mistode.core import MappingManager, NameGenerator
+    from mistode.python import PythonObfuscator
+
+    lines = []
+    for i in range(400):
+        lines.append(f"def fn{i}(a{i}, b{i}):")
+        lines.append(f"    acc{i} = a{i} + b{i}")
+        for j in range(9):
+            lines.append(f"    t{j}_{i} = acc{i} * {j}")
+        lines.append(f"    return acc{i}")
+    source = "\n".join(lines) + "\n"
+
+    start = time.monotonic()
+    PythonObfuscator(MappingManager(), NameGenerator(seed=1), "big.py").obfuscate(
+        source, embed_metadata=False
+    )
+    elapsed = time.monotonic() - start
+
+    # ~0.15s locally; the bound only catches a return to quadratic behaviour.
+    assert elapsed < 5.0, f"obfuscating 4800 lines took {elapsed:.1f}s"
