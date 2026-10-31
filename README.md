@@ -226,7 +226,7 @@ Restoration data travels inside the artifact; the password is the only external 
 - **KDF salt is fixed** (`mistode-kdf-v1`): the same passphrase derives the same key everywhere. Required for reproducible builds; the trade-off is that precomputation transfers across installations, so passphrase strength matters more.
 - **Legacy payloads**: files encrypted by Mistode <= 0.1.3 (no nonce/tag) fail authentication with an explicit error; re-obfuscate them with the current release.
 - **Token pasting disables renaming**: a file using `##` is left unrenamed, because the preprocessor can synthesise any identifier.
-- **Rename rate is limited**: dynamic features (attribute access, star imports, keyword arguments, reflection) make many names external contracts. On this project's own source, ~45% of eligible names are renamed in single-file mode and ~36% in project mode; real-world code with more cross-module surface is lower.
+- **Rename rate is limited**: dynamic features (attribute access, star imports, keyword arguments, reflection) make many names external contracts. On this project's own source, ~54% of eligible names are renamed in single-file mode and ~42% in project mode; real-world code with more cross-module surface is lower.
 - **`--aggressive-methods` is unsafe for libraries**: it renames class methods whose receivers are provably local (`self`/class name). External callers reach methods by name, so libraries can break; use it only for self-contained code.
 - **`--key` is ignored in project mode for restore**: project artifacts carry per-file metadata; restore from it directly (a combined key is written on obfuscation for auditing, but restore rejects `--key` to avoid ambiguous per-file mappings).
 
