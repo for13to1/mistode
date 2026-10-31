@@ -383,6 +383,41 @@ class TestLayoutBalance:
             )
 
 
+class TestFooterWithoutLayoutCount:
+    """A footer from before layout_count existed is still authoritative.
+
+    The footer's presence decides whether metadata was embedded; the layout
+    count only participates in the balance check.
+    """
+
+    @staticmethod
+    def _footer(mapping: dict) -> str:
+        encoded = base64.b64encode(
+            zlib.compress(json.dumps({"identifier_mapping": mapping}).encode())
+        ).decode()
+        return f"/* @mistode:metadata:{encoded} */"
+
+    def test_footer_without_layout_count_is_accepted(self):
+        artifact = self._footer({"x": "aaaa"})
+        restored = CObfuscator(MappingManager(), NameGenerator(), "t.c").restore(
+            artifact
+        )
+        assert restored == ""
+
+    def test_footer_with_empty_mapping_is_accepted(self):
+        artifact = self._footer({})
+        restored = CObfuscator(MappingManager(), NameGenerator(), "t.c").restore(
+            artifact
+        )
+        assert restored == ""
+
+    def test_no_footer_and_no_mapping_is_rejected(self):
+        with pytest.raises(ValueError, match="No identifier mapping"):
+            CObfuscator(MappingManager(), NameGenerator(), "t.c").restore(
+                "#include <stdio.h>\n"
+            )
+
+
 class TestKeyFilePathDiagnostics:
     """A non-empty mapping file skips metadata extraction.
 

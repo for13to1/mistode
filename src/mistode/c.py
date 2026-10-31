@@ -615,29 +615,21 @@ class CObfuscator:
         if tokens:
             output.append("".join(tokens))
 
-    def restore(  # noqa: C901
-        self,
-        source_code: str,
-        encryption_key: str | None = None,
-        cipher: str | None = None,
-    ) -> str:
-        """
-        Restores C source code using layout chunks.
-        """
-        if cipher is None:
-            cipher = "stream" if encryption_key is not None else "none"
-        self._cipher = make_cipher(cipher, encryption_key) if cipher != "none" else None
+    def _locate_markers(
+        self, source_code: str, lines: list[str]
+    ) -> tuple[dict[int, str], list[str], set[int]]:
+        """Find the comments that are chunk and metadata markers.
 
-        lines = source_code.splitlines()
-
-        # A marker is layout data only when the lexer reports it as a comment:
-        # the same text inside a string literal is program data. The comment
-        # text itself is kept, so a marker that shares a line with code is
-        # parsed without having to re-find it in the line.
-        chunk_comments: list[str] = []
-        chunk_lines: list[int] = []
+        A marker is layout data only when the lexer reports it as a comment:
+        the same text inside a string literal is program data. Chunks are
+        returned keyed by line so the caller can drop those lines, and the
+        comment text is kept so a marker sharing a line with code is parsed
+        without re-finding it in the line.
+        """
+        chunks: dict[int, str] = {}
         metadata_comments: list[str] = []
         metadata_lines: set[int] = set()
+
         line_starts: list[int] = []
         offset = 0
         for line in lines:
@@ -653,86 +645,96 @@ class CObfuscator:
             kind, _, _ = marker
             lineno = bisect.bisect_right(line_starts, match.start())
             if kind == "chunk":
-                chunk_comments.append(match.group(0))
-                chunk_lines.append(lineno)
+                chunks[lineno] = match.group(0)
             else:
                 metadata_comments.append(match.group(0))
                 metadata_lines.add(lineno)
+        return chunks, metadata_comments, metadata_lines
 
-        # Extract embedded metadata for the identifier mapping, if present.
-        metadata_found = False
-        expected_layout_count = None
-        if metadata_comments:
-            # Emitted last, so the final metadata comment is the footer.
-            _, encoded_metadata, secure = classify_marker(metadata_comments[-1], "c")
-            data = decode_metadata(encoded_metadata, secure=secure, cipher=self._cipher)
-            if not self.mm.mapping:
-                self.mm.mapping = data.get("identifier_mapping", {})
-                self.mm.reverse_mapping = {v: k for k, v in self.mm.mapping.items()}
-            if data.get("source_encoding"):
-                self.mm.source_encoding = data["source_encoding"]
-            expected_layout_count = data.get("layout_count")
-            metadata_found = True
+    def _read_metadata(self, metadata_comments: list[str]) -> int | None:
+        """Load the identifier mapping from the footer, if there is one.
 
-        # Chunks form a FIFO queue; each code token consumes one layout
-        # entry, which reproduces the original whitespace/comment stream.
-        restored_parts = []
+        Returns the layout count the artifact declares. A footer written before
+        that field existed yields None, which is also what "no footer" returns;
+        callers that need to tell the two apart must look at
+        `metadata_comments`.
+        """
+        if not metadata_comments:
+            return None
+        # Emitted last, so the final metadata comment is the footer.
+        _, encoded, secure = classify_marker(metadata_comments[-1], "c")
+        data = decode_metadata(encoded, secure=secure, cipher=self._cipher)
+        if not self.mm.mapping:
+            self.mm.mapping = data.get("identifier_mapping", {})
+            self.mm.reverse_mapping = {v: k for k, v in self.mm.mapping.items()}
+        if data.get("source_encoding"):
+            self.mm.source_encoding = data["source_encoding"]
+        return data.get("layout_count")
 
-        pending_layouts = []
+    def _split_lines_and_layouts(
+        self,
+        lines: list[str],
+        chunks: dict[int, str],
+        metadata_lines: set[int],
+    ) -> tuple[str, list[dict]]:
+        """Split the artifact into clean code and its flattened layouts.
 
-        # Fail loudly only when there is genuinely no mapping source:
-        # a valid (possibly empty) mapping from embedded metadata is fine,
-        # since a file with no obfuscatable identifiers has nothing to map.
-        if not metadata_found and not self.mm.mapping and not self.mm.reverse_mapping:
-            raise ValueError(
-                "No identifier mapping available for restoration. "
-                "The obfuscated file has no embedded metadata and no key file "
-                "was provided."
-            )
-
-        # Tokenize the cleaned code as one stream: per-line tokenizing would
-        # split tokens that span lines (raw strings, continuations).
-        # Markers are consumed by the line their comment starts on.
+        Chunk lines are dropped; the layouts they carry are decoded and
+        associated with the code line that follows them, then flattened in
+        emission order.
+        """
         chunk_payloads: dict[int, tuple[str, bool]] = {}
-        for comment, lineno in zip(chunk_comments, chunk_lines, strict=True):
+        for lineno, comment in chunks.items():
             _, payload, secure = classify_marker(comment, "c")
             chunk_payloads[lineno] = (payload, secure)
 
         clean_lines: list[str] = []
+        pending: list[dict] = []
+        all_layouts: list[dict] = []
 
         for lineno, line in enumerate(lines, start=1):
             if lineno in chunk_payloads:
                 payload, secure = chunk_payloads[lineno]
-                pending_layouts.extend(
+                pending.extend(
                     decode_layouts(payload, secure=secure, cipher=self._cipher)
                 )
                 continue
-
             if lineno in metadata_lines:
                 continue
-
             clean_lines.append(line)
+            if pending:
+                all_layouts.extend(pending)
+                pending = []
+        all_layouts.extend(pending)
 
-        clean_code = "\n".join(clean_lines)
+        return "\n".join(clean_lines), all_layouts
 
-        # Spacing in the obfuscated code is synthetic; the original comes
-        # from each layout entry's "p" prefix.
-        consumed_layouts = 0
+    def _replay_token_stream(
+        self, clean_code: str, all_layouts: list[dict]
+    ) -> tuple[str, int, int]:
+        """Rebuild the original text by replaying layouts onto each token.
+
+        Returns the restored text, the number of layouts consumed, and the
+        number of tokens left without one. Records after the last token are
+        appended; the caller derives how many are left over.
+        """
+        restored_parts: list[str] = []
         unpaired_tokens = 0
+        next_layout = 0
+
         for match in self._tokenize(clean_code):
             token = match.group(0)
             if not token.strip() or match.group("comment"):
                 continue
-            if not pending_layouts:
+            if next_layout >= len(all_layouts):
                 # A token with no layout record means a chunk went missing:
-                # its original whitespace/comments are gone. Real artifacts
-                # always pair them, so this cannot happen on a healthy file.
+                # its original whitespace and comments are gone.
                 unpaired_tokens += 1
                 restored_parts.append(token)
                 continue
 
-            layout = pending_layouts.pop(0)
-            consumed_layouts += 1
+            layout = all_layouts[next_layout]
+            next_layout += 1
             restored_parts.append(layout.get("p", ""))
 
             ident = match.group("ident")
@@ -742,18 +744,52 @@ class CObfuscator:
             else:
                 restored_parts.append(token)
 
-        # Flush any remaining layouts (trailing)
-        for layout in pending_layouts:
+        for layout in all_layouts[next_layout:]:
             restored_parts.append(layout.get("p", ""))
 
-        self._verify_layout_balance(
-            consumed_layouts,
-            unpaired_tokens,
-            len(pending_layouts),
-            expected_layout_count,
-        )
+        return "".join(restored_parts), next_layout, unpaired_tokens
 
-        return "".join(restored_parts)
+    def restore(
+        self,
+        source_code: str,
+        encryption_key: str | None = None,
+        cipher: str | None = None,
+    ) -> str:
+        """Restore C source code using layout chunks."""
+        if cipher is None:
+            cipher = "stream" if encryption_key is not None else "none"
+        self._cipher = make_cipher(cipher, encryption_key) if cipher != "none" else None
+
+        lines = source_code.splitlines()
+        chunks, metadata_comments, metadata_lines = self._locate_markers(
+            source_code, lines
+        )
+        expected_layout_count = self._read_metadata(metadata_comments)
+
+        # A valid (possibly empty) mapping from embedded metadata is enough;
+        # fail only when there is genuinely no mapping source at all. A footer
+        # is authoritative even when it carries no mapping.
+        if (
+            not metadata_comments
+            and not self.mm.mapping
+            and not self.mm.reverse_mapping
+        ):
+            raise ValueError(
+                "No identifier mapping available for restoration. "
+                "The obfuscated file has no embedded metadata and no key file "
+                "was provided."
+            )
+
+        clean_code, all_layouts = self._split_lines_and_layouts(
+            lines, chunks, metadata_lines
+        )
+        restored, consumed, unpaired = self._replay_token_stream(
+            clean_code, all_layouts
+        )
+        self._verify_layout_balance(
+            consumed, unpaired, len(all_layouts) - consumed, expected_layout_count
+        )
+        return restored
 
     @staticmethod
     def _verify_layout_balance(
