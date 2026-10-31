@@ -5,7 +5,14 @@ import zlib
 from io import StringIO
 from typing import Any
 
-from .payload import decode_layouts, inconsistent, not_an_artifact, untokenisable
+from .payload import (
+    build_marker,
+    classify_marker,
+    decode_layouts,
+    inconsistent,
+    not_an_artifact,
+    untokenisable,
+)
 
 
 class LayoutEngine:
@@ -15,8 +22,8 @@ class LayoutEngine:
     Layout (Whitespace, Comments, String Styles).
     """
 
-    # Number of layout records produced by the last obfuscation run. Embedded
-    # in the metadata so restoration can verify the artifact is intact.
+    # Number of layout records the last obfuscation run emitted. Embedded in
+    # the metadata; see CObfuscator._verify_layout_balance for why.
     layout_count: int = 0
 
     def obfuscate_token_stream(  # noqa: C901
@@ -28,12 +35,8 @@ class LayoutEngine:
         """Obfuscate `source_code` and interleave one layout chunk per line.
 
         `replacements` maps (line, character column) to the new identifier.
-
-        After the call, ``self.layout_count`` holds the number of layout
-        records emitted. The count is embedded in the metadata so restoration
-        can detect a chunk marker that was inserted or removed: without it, a
-        single-record change lands inside the range a legitimate artifact can
-        occupy (0 or 1 leftover records) and goes unnoticed.
+        Afterwards ``self.layout_count`` holds the number of layout records
+        emitted; the caller embeds it in the metadata.
         """
         self.layout_count = 0
         source_io = StringIO(source_code)
@@ -298,24 +301,17 @@ class LayoutEngine:
         compressed = zlib.compress(json_bytes)
         self.layout_count += len(layouts)
 
-        if encryption_manager:
-            # `secure_` prefix tells restoration the payload must be
-            # decrypted before base64/zlib decoding.
+        secure = encryption_manager is not None
+        if secure:
             encoded = encryption_manager.encrypt(compressed)
-            comment = f"#@mistode:secure_chunk:{encoded}"
         else:
             encoded = base64.b64encode(compressed).decode("ascii")
-            comment = f"#@mistode:chunk:{encoded}"
+        comment = build_marker("chunk", "python", encoded, secure)
 
         output_lines.append(comment)
 
         code_line = "".join(tokens)
         output_lines.append(code_line)
-
-    # Markers are matched against COMMENT tokens only (see
-    # restore_token_stream): the same text inside a string literal is program
-    # data, not layout.
-    CHUNK_PREFIXES = ("#@mistode:chunk:", "#@mistode:secure_chunk:")
 
     def _collect_chunk_payloads(
         self, obfuscated_code: str
@@ -332,11 +328,11 @@ class LayoutEngine:
             for tok in tokenize.generate_tokens(StringIO(obfuscated_code).readline):
                 if tok.type != tokenize.COMMENT:
                     continue
-                if not tok.string.startswith(self.CHUNK_PREFIXES):
+                marker = classify_marker(tok.string, "python")
+                if marker is None or marker[0] != "chunk":
                     continue
-                secure = tok.string.startswith("#@mistode:secure_chunk:")
-                prefix = "#@mistode:secure_chunk:" if secure else "#@mistode:chunk:"
-                chunk_payloads[tok.start[0]] = (tok.string[len(prefix) :], secure)
+                _, payload, secure = marker
+                chunk_payloads[tok.start[0]] = (payload, secure)
         except tokenize.TokenError as exc:
             # Without a complete token stream no marker can be trusted, and
             # the file may still contain chunks that were simply not reached.
@@ -463,10 +459,9 @@ class LayoutEngine:
     ) -> str:
         """Restore original code from an artifact with interleaved comments.
 
-        `expected_layout_count` comes from the embedded metadata. When given,
-        a chunk marker that was inserted or removed is reported instead of
-        producing silently misaligned output (a single-record change falls
-        inside the range a legitimate artifact can occupy).
+        `expected_layout_count` comes from the embedded metadata; when given,
+        it is compared with the records actually read before anything is
+        returned.
         """
         chunk_payloads = self._collect_chunk_payloads(obfuscated_code)
 

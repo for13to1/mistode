@@ -27,7 +27,13 @@ from pathlib import Path
 
 from .core import MappingManager, NameGenerator
 from .encrypt import make_cipher
-from .payload import decode_layouts, decode_metadata, inconsistent
+from .payload import (
+    build_marker,
+    classify_marker,
+    decode_layouts,
+    decode_metadata,
+    inconsistent,
+)
 
 
 class CObfuscator:
@@ -397,18 +403,16 @@ class CObfuscator:
         mapping_info = {
             "identifier_mapping": self.mm.mapping,
             "source_encoding": self.mm.source_encoding,
-            # Integrity check: restoration compares this with the records it
-            # actually reads. A single inserted or deleted record is otherwise
-            # indistinguishable from a healthy artifact.
+            # See _verify_layout_balance for what this protects against.
             "layout_count": self._layout_count,
         }
         json_bytes = json.dumps(mapping_info).encode("utf-8")
         compressed = zlib.compress(json_bytes)
         if self._cipher:
             encoded = self._cipher.encrypt(compressed)
-            return f"/* @mistode:secure_metadata:{encoded} */"
+            return build_marker("metadata", "c", encoded, secure=True)
         encoded = base64.b64encode(compressed).decode("ascii")
-        return f"/* @mistode:metadata:{encoded} */"
+        return build_marker("metadata", "c", encoded, secure=False)
 
     def obfuscate(  # noqa: C901
         self,
@@ -596,29 +600,20 @@ class CObfuscator:
         json_bytes = json.dumps(layouts).encode("utf-8")
         compressed = zlib.compress(json_bytes)
         self._layout_count += len(layouts)
-        if self._cipher:
+        secure = self._cipher is not None
+        if secure:
             encoded = self._cipher.encrypt(compressed)
-            tag = "secure_chunk"
         else:
             encoded = base64.b64encode(compressed).decode("ascii")
-            tag = "chunk"
 
         # After a continuation backslash the next line joins the same logical
         # line, so `//` would swallow the macro body. Block comments are safe,
         # but the comment line must re-emit the backslash.
         continued = bool(output and output[-1].rstrip().endswith("\\"))
         suffix = " \\" if continued else ""
-        output.append(f"/* @mistode:{tag}:{encoded} */{suffix}")
+        output.append(build_marker("chunk", "c", encoded, secure) + suffix)
         if tokens:
             output.append("".join(tokens))
-
-    # Markers are matched against COMMENT tokens only (see restore): the same
-    # text inside a string literal is program data, not layout.
-    CHUNK_PREFIXES = ("/* @mistode:chunk:", "/* @mistode:secure_chunk:")
-    METADATA_PREFIXES = (
-        "/* @mistode:metadata:",
-        "/* @mistode:secure_metadata:",
-    )
 
     def restore(  # noqa: C901
         self,
@@ -652,13 +647,16 @@ class CObfuscator:
         for match in self._tokenize(source_code):
             if not match.group("comment"):
                 continue
-            text = match.group(0)
+            marker = classify_marker(match.group(0), "c")
+            if marker is None:
+                continue
+            kind, _, _ = marker
             lineno = bisect.bisect_right(line_starts, match.start())
-            if text.startswith(self.CHUNK_PREFIXES):
-                chunk_comments.append(text)
+            if kind == "chunk":
+                chunk_comments.append(match.group(0))
                 chunk_lines.append(lineno)
-            elif text.startswith(self.METADATA_PREFIXES):
-                metadata_comments.append(text)
+            else:
+                metadata_comments.append(match.group(0))
                 metadata_lines.add(lineno)
 
         # Extract embedded metadata for the identifier mapping, if present.
@@ -666,13 +664,7 @@ class CObfuscator:
         expected_layout_count = None
         if metadata_comments:
             # Emitted last, so the final metadata comment is the footer.
-            comment = metadata_comments[-1]
-            secure = comment.startswith("/* @mistode:secure_metadata:")
-            prefix = (
-                "/* @mistode:secure_metadata:" if secure else "/* @mistode:metadata:"
-            )
-            encoded_metadata = comment[len(prefix) :].rstrip("\\").strip()
-            encoded_metadata = encoded_metadata.removesuffix("*/").strip()
+            _, encoded_metadata, secure = classify_marker(metadata_comments[-1], "c")
             data = decode_metadata(encoded_metadata, secure=secure, cipher=self._cipher)
             if not self.mm.mapping:
                 self.mm.mapping = data.get("identifier_mapping", {})
@@ -703,10 +695,7 @@ class CObfuscator:
         # Markers are consumed by the line their comment starts on.
         chunk_payloads: dict[int, tuple[str, bool]] = {}
         for comment, lineno in zip(chunk_comments, chunk_lines, strict=True):
-            secure = comment.startswith("/* @mistode:secure_chunk:")
-            prefix = "/* @mistode:secure_chunk:" if secure else "/* @mistode:chunk:"
-            payload = comment[len(prefix) :].rstrip("\\").strip()
-            payload = payload.removesuffix("*/").strip()
+            _, payload, secure = classify_marker(comment, "c")
             chunk_payloads[lineno] = (payload, secure)
 
         clean_lines: list[str] = []
@@ -757,12 +746,6 @@ class CObfuscator:
         for layout in pending_layouts:
             restored_parts.append(layout.get("p", ""))
 
-        # Structural self-check. A healthy artifact pairs every code token
-        # with exactly one layout record and leaves at most one record over
-        # (the trailing end-of-file layout, absent when the source had no
-        # final newline). An inserted marker leaves extra records behind; a
-        # deleted one leaves tokens without layout. Both are reported rather
-        # than emitted as silently mangled source.
         self._verify_layout_balance(
             consumed_layouts,
             unpaired_tokens,

@@ -30,7 +30,13 @@ from io import StringIO
 from .core import MappingManager, NameGenerator
 from .encrypt import EncryptionManager, make_cipher
 from .layout import LayoutEngine
-from .payload import decode_metadata, untokenisable
+from .payload import (
+    METADATA_MARKERS,
+    build_marker,
+    classify_marker,
+    decode_metadata,
+    untokenisable,
+)
 
 
 def _comment_tokens(code: str) -> list[tokenize.TokenInfo]:
@@ -161,9 +167,6 @@ class PythonObfuscator:
         obfuscated_code = layout_engine.obfuscate_token_stream(
             source_code, replacements, encryption_manager
         )
-        # Verified on restore: a chunk marker that is inserted or removed
-        # shifts this count, which is otherwise undetectable (see
-        # LayoutEngine.obfuscate_token_stream).
         self._layout_count = layout_engine.layout_count
 
         if embed_metadata:
@@ -513,11 +516,12 @@ class PythonObfuscator:
         json_str = json.dumps(mapping_info, ensure_ascii=False)
         compressed = zlib.compress(json_str.encode("utf-8"))
 
-        if encryption_manager:
+        secure = encryption_manager is not None
+        if secure:
             encoded = encryption_manager.encrypt(compressed)
-            return f"#@mistode:secure_metadata:{encoded}"
-        encoded = base64.b64encode(compressed).decode("ascii")
-        return f"#@mistode:metadata:{encoded}"
+        else:
+            encoded = base64.b64encode(compressed).decode("ascii")
+        return build_marker("metadata", "python", encoded, secure)
 
     def _extract_metadata_from_code(
         self, code: str, encryption_manager: EncryptionManager | None = None
@@ -529,17 +533,11 @@ class PythonObfuscator:
         restore even though it is a valid artifact.
         """
         for tok in _comment_tokens(code):
-            if not tok.string.startswith(
-                ("#@mistode:metadata:", "#@mistode:secure_metadata:")
-            ):
+            marker = classify_marker(tok.string, "python")
+            if marker is None or marker[0] != "metadata":
                 continue
-            secure = tok.string.startswith("#@mistode:secure_metadata:")
-            prefix = "#@mistode:secure_metadata:" if secure else "#@mistode:metadata:"
-            return decode_metadata(
-                tok.string[len(prefix) :].strip(),
-                secure=secure,
-                cipher=encryption_manager,
-            )
+            _, payload, secure = marker
+            return decode_metadata(payload, secure=secure, cipher=encryption_manager)
         return None
 
     def _save_mapping(self, mapping_file: str) -> None:
@@ -600,11 +598,10 @@ class PythonObfuscator:
         identifier_mapping = mapping_info.get("identifier_mapping", {})
         reverse_mapping = {v: k for k, v in identifier_mapping.items()}
 
-        # LayoutEngine expects the code without the metadata footer.
-        # Match the metadata markers exactly: the bare "#@mistode:" prefix
-        # also matches interleaved chunks, truncating at offset 0.
+        # LayoutEngine expects the code without the metadata footer. Truncating
+        # at the last footer marker keeps any earlier chunk intact.
         clean_obfuscated_code = obfuscated_code
-        for marker in ("#@mistode:metadata:", "#@mistode:secure_metadata:"):
+        for marker in METADATA_MARKERS["python"]:
             idx = obfuscated_code.rfind(marker)
             if idx != -1:
                 clean_obfuscated_code = obfuscated_code[:idx].rstrip()

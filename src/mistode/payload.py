@@ -24,6 +24,61 @@ class PayloadError(ValueError):
     """A payload could not be decoded; the message names the stage."""
 
 
+# Marker syntax per language. Both readers share the classification below;
+# only the comment lexer and the line-number source differ between them.
+CHUNK_MARKERS = {
+    "python": ("#@mistode:chunk:", "#@mistode:secure_chunk:"),
+    "c": ("/* @mistode:chunk:", "/* @mistode:secure_chunk:"),
+}
+METADATA_MARKERS = {
+    "python": ("#@mistode:metadata:", "#@mistode:secure_metadata:"),
+    "c": ("/* @mistode:metadata:", "/* @mistode:secure_metadata:"),
+}
+
+
+def classify_marker(text: str, language: str) -> tuple[str, str, bool] | None:
+    """Classify a comment as a chunk or metadata marker.
+
+    Returns `(kind, payload, secure)`, where `kind` is ``"chunk"`` or
+    ``"metadata"``, or None when the comment is ordinary text. Only text the
+    lexer reported as a comment reaches this function.
+    """
+    for kind, markers in (
+        ("chunk", CHUNK_MARKERS),
+        ("metadata", METADATA_MARKERS),
+    ):
+        plain, secure_marker = markers[language]
+        if text.startswith(secure_marker):
+            return kind, _strip_marker(text, secure_marker, language), True
+        if text.startswith(plain):
+            return kind, _strip_marker(text, plain, language), False
+    return None
+
+
+def _strip_marker(text: str, prefix: str, language: str) -> str:
+    """Drop the marker prefix and the language's comment terminator."""
+    payload = text[len(prefix) :]
+    if language == "c":
+        # A chunk comment inside a multi-line macro carries a continuation
+        # backslash before the terminator.
+        payload = payload.rstrip("\\").strip()
+        return payload.removesuffix("*/").strip()
+    return payload.strip()
+
+
+def build_marker(kind: str, language: str, encoded: str, secure: bool) -> str:
+    """Wrap an encoded payload in the marker comment for `language`.
+
+    `kind` and `language` are validated rather than defaulted: a typo would
+    otherwise emit a marker that the reader classifies as the other kind.
+    """
+    markers = {"chunk": CHUNK_MARKERS, "metadata": METADATA_MARKERS}[kind]
+    prefix = markers[language][1 if secure else 0]
+    if language == "c":
+        return f"{prefix}{encoded} */"
+    return f"{prefix}{encoded}"
+
+
 def untokenisable(exc: BaseException) -> ValueError:
     """Build the error for a file that cannot be tokenised at all.
 
