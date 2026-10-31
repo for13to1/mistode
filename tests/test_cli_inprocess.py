@@ -26,7 +26,14 @@ from pathlib import Path
 
 import pytest
 
-from mistode.cli import Command, Language, ObfuscationService, Options
+from mistode.cli import (
+    Command,
+    FileNotFound,
+    Language,
+    ObfuscationError,
+    ObfuscationService,
+    Options,
+)
 
 
 def _svc(command: Command, input_file: Path, output_file: Path, **kwargs):
@@ -67,7 +74,7 @@ class TestDetectEncoding:
     def test_missing_file_raises(self, tmp_path: Path):
         p = tmp_path / "missing.py"
         svc = _svc(Command.OBFUSCATE, p, tmp_path / "o.py")
-        with pytest.raises(Exception):
+        with pytest.raises(FileNotFound):
             svc._detect_encoding(p)
 
 
@@ -134,7 +141,7 @@ class TestSingleFileInProcess:
         src.write_text("def broken(:\n    pass\n")
         out = tmp_path / "bad.obf.py"
         svc = _svc(Command.OBFUSCATE, src, out)
-        with pytest.raises(Exception):
+        with pytest.raises(ObfuscationError):
             svc.execute()
 
 
@@ -162,7 +169,7 @@ class TestDirectoryInProcess:
         proj.mkdir()
         out = tmp_path / "empty.obf"
         svc = _svc(Command.OBFUSCATE, proj, out)
-        with pytest.raises(Exception):
+        with pytest.raises(ObfuscationError):
             svc.execute()
 
 

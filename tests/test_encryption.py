@@ -64,11 +64,11 @@ class TestEncryption:
         assert restored.strip() == source.strip()
 
         # Incorrect password
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             obfuscator.restore(None, obfuscated, encryption_key="wrong")
 
         # No password
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             obfuscator.restore(None, obfuscated)
 
     def test_structure_restoration_order(self):
@@ -181,12 +181,14 @@ class TestStreamCipher:
         cipher = self._cipher()
         known = b"import os"
         known_ct = base64.b64decode(cipher.encrypt(known))
-        keystream = bytes(c ^ p for c, p in zip(known_ct[16:], known))
+        # Truncating to the plaintext length is the point: the keystream is
+        # longer than `known`, and only its prefix is recoverable.
+        keystream = bytes(c ^ p for c, p in zip(known_ct[16:], known, strict=False))
 
         other_ct = base64.b64decode(cipher.encrypt(b"def secret(): pass"))
         # Applying the first payload's keystream must not yield the second
         # payload's plaintext.
-        derived = bytes(c ^ k for c, k in zip(other_ct[16:], keystream))
+        derived = bytes(c ^ k for c, k in zip(other_ct[16:], keystream, strict=False))
         assert not derived.startswith(b"def secret")
 
     def test_tampering_is_detected(self):

@@ -30,6 +30,22 @@ from io import StringIO
 from .core import MappingManager, NameGenerator
 from .encrypt import EncryptionManager, make_cipher
 from .layout import LayoutEngine
+from .payload import decode_metadata, untokenisable
+
+
+def _comment_tokens(code: str) -> list[tokenize.TokenInfo]:
+    """Return the COMMENT tokens of `code`.
+
+    Used to distinguish real markers from identical text inside a string.
+    Raises `tokenize.TokenError` when the input cannot be tokenised, so a
+    caller looking for a marker does not mistake an unreadable file for one
+    that simply has none.
+    """
+    return [
+        tok
+        for tok in tokenize.generate_tokens(StringIO(code).readline)
+        if tok.type == tokenize.COMMENT
+    ]
 
 
 class ImportAnalyzer:
@@ -104,6 +120,8 @@ class PythonObfuscator:
 
         self.import_analyzer = ImportAnalyzer()
         self._cached_tree: ast.AST | None = None
+        # Set by obfuscate(); embedded in the metadata as an integrity check.
+        self._layout_count: int | None = None
         self.preserved_keywords: set[str] = set()
 
         self.identifier_mapping: dict[str, str] = {}
@@ -120,7 +138,7 @@ class PythonObfuscator:
         # None means "auto": encrypt when a password was supplied. An
         # explicit value always wins.
         if cipher is None:
-            cipher = "stream" if encryption_key else "none"
+            cipher = "stream" if encryption_key is not None else "none"
         encryption_manager = (
             make_cipher(cipher, encryption_key) if cipher != "none" else None
         )
@@ -143,6 +161,10 @@ class PythonObfuscator:
         obfuscated_code = layout_engine.obfuscate_token_stream(
             source_code, replacements, encryption_manager
         )
+        # Verified on restore: a chunk marker that is inserted or removed
+        # shifts this count, which is otherwise undetectable (see
+        # LayoutEngine.obfuscate_token_stream).
+        self._layout_count = layout_engine.layout_count
 
         if embed_metadata:
             metadata_comment = self._generate_metadata_comment(encryption_manager)
@@ -241,7 +263,7 @@ class PythonObfuscator:
                 new_name = self.obfuscator._generate_obfuscated_name(name)
                 replacements[(lineno, col_offset)] = new_name
 
-            def _find_def_name_location(  # noqa: C901
+            def _find_def_name_location(
                 self,
                 node_lineno: int,
                 name: str,
@@ -355,25 +377,11 @@ class PythonObfuscator:
 
                 self.generic_visit(node)
 
-            def visit_ClassDef(self, node):  # noqa: C901
+            def visit_ClassDef(self, node):
                 self.obfuscator.known_class_names.add(node.name)
-                # `Class.attr` names stay original (attribute access is
-                # never renamed), except methods proven obfuscatable - their
-                # call sites are renamed together.
-                for stmt in node.body:
-                    if isinstance(stmt, ast.Assign):
-                        for target in stmt.targets:
-                            if isinstance(target, ast.Name):
-                                self.obfuscator.ignore_set.add(target.id)
-                    elif isinstance(stmt, ast.AnnAssign) and isinstance(
-                        stmt.target, ast.Name
-                    ):
-                        self.obfuscator.ignore_set.add(stmt.target.id)
-                    elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if stmt.name not in self.obfuscator.obfuscatable_methods:
-                            self.obfuscator.ignore_set.add(stmt.name)
-                    elif isinstance(stmt, ast.ClassDef):
-                        self.obfuscator.ignore_set.add(stmt.name)
+                # Class-body names were already protected up front by
+                # `_collect_protected_bindings`: doing it here would be too
+                # late for references visited earlier in the traversal.
 
                 if self._should_obfuscate(node.name):
                     loc = self._find_def_name_location(
@@ -439,9 +447,47 @@ class PythonObfuscator:
                         )
                 self.generic_visit(node)
 
+        self._collect_protected_bindings(tree)
+
         collector = ReplacementCollector(self, tokens, source_code)
         collector.visit(tree)
         return replacements
+
+    def _collect_protected_bindings(self, tree: ast.AST) -> None:  # noqa: C901
+        """Protect bindings that are not `ast.Name` nodes, before traversal.
+
+        Traversal order matters: a module-level reference visited before a
+        `class` body would be recorded as a replacement while the class-body
+        definition (registered only when `visit_ClassDef` runs) stays
+        untouched, separating a definition from its uses. Class bodies are
+        therefore registered up front rather than during traversal.
+
+        Match capture bindings live in `MatchAs.name` / `MatchStar.name` /
+        `MatchMapping.rest`, never in an `ast.Name` with a `Store` context, so
+        they would otherwise stay unrenamed while their uses are renamed.
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                for stmt in node.body:
+                    if isinstance(stmt, ast.Assign):
+                        for target in stmt.targets:
+                            if isinstance(target, ast.Name):
+                                self.ignore_set.add(target.id)
+                    elif isinstance(stmt, ast.AnnAssign) and isinstance(
+                        stmt.target, ast.Name
+                    ):
+                        self.ignore_set.add(stmt.target.id)
+                    elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        if stmt.name not in self.obfuscatable_methods:
+                            self.ignore_set.add(stmt.name)
+                    elif isinstance(stmt, ast.ClassDef):
+                        self.ignore_set.add(stmt.name)
+            elif isinstance(node, ast.MatchAs) and node.name:
+                self.ignore_set.add(node.name)
+            elif isinstance(node, ast.MatchStar) and node.name:
+                self.ignore_set.add(node.name)
+            elif isinstance(node, ast.MatchMapping) and node.rest:
+                self.ignore_set.add(node.rest)
 
     def _generate_obfuscated_name(self, original: str) -> str:
         if original in self.identifier_mapping:
@@ -452,10 +498,13 @@ class PythonObfuscator:
         return obfuscated
 
     def _get_mapping_info(self) -> dict:
-        return {
+        info = {
             "identifier_mapping": self.identifier_mapping,
             "source_encoding": self.mm.source_encoding,
         }
+        if self._layout_count is not None:
+            info["layout_count"] = self._layout_count
+        return info
 
     def _generate_metadata_comment(
         self, encryption_manager: EncryptionManager | None = None
@@ -473,25 +522,24 @@ class PythonObfuscator:
     def _extract_metadata_from_code(
         self, code: str, encryption_manager: EncryptionManager | None = None
     ) -> dict | None:
-        for line in code.splitlines():
-            if line.startswith("#@mistode:secure_metadata:"):
-                if not encryption_manager:
-                    raise ValueError(
-                        "File is encrypted: provide --password and the "
-                        "matching --cipher (default: stream)"
-                    )
-                encoded = line.split(":", 2)[2].strip()
-                compressed = encryption_manager.decrypt(encoded)
-                json_str = zlib.decompress(compressed).decode("utf-8")
-                return json.loads(json_str)
-            if line.startswith("#@mistode:metadata:"):
-                encoded = line.split(":", 2)[2].strip()
-                try:
-                    compressed = base64.b64decode(encoded)
-                    json_str = zlib.decompress(compressed).decode("utf-8")
-                    return json.loads(json_str)
-                except Exception:
-                    return None
+        """Read the metadata footer, identified as a comment token.
+
+        A line-based prefix test also matches the same text inside a
+        multi-line string, which is program data: such a file would fail to
+        restore even though it is a valid artifact.
+        """
+        for tok in _comment_tokens(code):
+            if not tok.string.startswith(
+                ("#@mistode:metadata:", "#@mistode:secure_metadata:")
+            ):
+                continue
+            secure = tok.string.startswith("#@mistode:secure_metadata:")
+            prefix = "#@mistode:secure_metadata:" if secure else "#@mistode:metadata:"
+            return decode_metadata(
+                tok.string[len(prefix) :].strip(),
+                secure=secure,
+                cipher=encryption_manager,
+            )
         return None
 
     def _save_mapping(self, mapping_file: str) -> None:
@@ -508,7 +556,7 @@ class PythonObfuscator:
     ) -> str:
         mapping_info = {}
         if cipher is None:
-            cipher = "stream" if encryption_key else "none"
+            cipher = "stream" if encryption_key is not None else "none"
         encryption_manager = (
             make_cipher(cipher, encryption_key) if cipher != "none" else None
         )
@@ -520,9 +568,15 @@ class PythonObfuscator:
         # An empty mapping from a key file is unusable; fall back to the
         # embedded metadata rather than silently restoring nothing.
         if obfuscated_code and not mapping_info.get("identifier_mapping"):
-            extracted = self._extract_metadata_from_code(
-                obfuscated_code, encryption_manager
-            )
+            try:
+                extracted = self._extract_metadata_from_code(
+                    obfuscated_code, encryption_manager
+                )
+            except tokenize.TokenError as exc:
+                # The footer could not even be located. Report the tokenising
+                # failure instead of "no metadata", which would send the
+                # reader looking for a missing footer that may be present.
+                raise untokenisable(exc) from exc
             if extracted:
                 mapping_info = extracted
 
@@ -558,7 +612,10 @@ class PythonObfuscator:
 
         layout_engine = LayoutEngine()
         restored_code = layout_engine.restore_token_stream(
-            clean_obfuscated_code, reverse_mapping, encryption_manager
+            clean_obfuscated_code,
+            reverse_mapping,
+            encryption_manager,
+            expected_layout_count=mapping_info.get("layout_count"),
         )
 
         return restored_code

@@ -83,7 +83,7 @@ class NameGenerator:
         Generate unique obfuscated identifier
         """
         max_attempts = 1000  # Increased attempts to handle more complex cases
-        for attempt in range(max_attempts):
+        for _ in range(max_attempts):
             token = self._generate_single()
 
             # Check for duplicates and homograph issues

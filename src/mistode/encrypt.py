@@ -72,8 +72,8 @@ class NullCipher:
     def decrypt(self, data: str) -> bytes:
         try:
             return base64.b64decode(data)
-        except Exception:
-            raise ValueError("Invalid base64 input")
+        except Exception as e:
+            raise ValueError("Invalid base64 input") from e
 
     def get_seed(self) -> int:
         return 0
@@ -123,15 +123,15 @@ class StreamCipher:
         nonce = self._nonce_for(data)
         enc_key, mac_key = self._payload_keys(nonce)
         stream = self._keystream(enc_key, len(data))
-        ciphertext = bytes(a ^ b for a, b in zip(data, stream))
+        ciphertext = bytes(a ^ b for a, b in zip(data, stream, strict=True))
         tag = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
         return base64.b64encode(nonce + ciphertext + tag).decode("ascii")
 
     def decrypt(self, data: str) -> bytes:
         try:
             raw = base64.b64decode(data)
-        except Exception:
-            raise ValueError("Invalid base64 input")
+        except Exception as e:
+            raise ValueError("Invalid base64 input") from e
         if len(raw) < NONCE_SIZE + TAG_SIZE:
             # Mistode <= 0.1.3 encrypted payloads without a nonce or tag.
             # They cannot be authenticated, so restoration is refused with
@@ -152,7 +152,7 @@ class StreamCipher:
                 "(identifier mapping could not be recovered)"
             )
         stream = self._keystream(enc_key, len(ciphertext))
-        return bytes(a ^ b for a, b in zip(ciphertext, stream))
+        return bytes(a ^ b for a, b in zip(ciphertext, stream, strict=True))
 
     def get_seed(self) -> int:
         return int.from_bytes(self._master[:8], "big")
@@ -172,8 +172,16 @@ def make_cipher(kind: str, password: str | None, *, strict: bool = True):
         return NullCipher()
     if kind == "none":
         return NullCipher()
-    if not password:
+    if password is None:
         raise ValueError(f"Cipher '{kind}' requires a password")
+    if password == "":
+        # An explicitly empty password is a mistake, not a request for
+        # plaintext: treating it as "absent" silently downgrades the artifact
+        # to unencrypted output.
+        raise ValueError(
+            "Password cannot be empty. Omit it for plain payloads, or pass a "
+            "non-empty value to encrypt."
+        )
     return StreamCipher(password)
 
 

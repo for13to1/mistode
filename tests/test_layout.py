@@ -89,11 +89,11 @@ def string_test():
         obfuscated = obfuscator.obfuscate(source, encryption_key=password)
 
         # Fail without key
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             obfuscator.restore(None, obfuscated)
 
         # Fail with wrong key
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             obfuscator.restore(None, obfuscated, encryption_key="wrong")
 
         # Succeed with correct key

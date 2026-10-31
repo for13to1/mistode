@@ -14,6 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import base64
+import bisect
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from .core import MappingManager, NameGenerator
 from .encrypt import make_cipher
+from .payload import decode_layouts, decode_metadata, inconsistent
 
 
 class CObfuscator:
@@ -140,6 +142,10 @@ class CObfuscator:
 
         # Payload cipher; set per call by obfuscate()/restore().
         self._cipher = None
+
+        # Layout records emitted by obfuscate(); embedded in the metadata so
+        # restoration can detect inserted or removed chunk markers.
+        self._layout_count = 0
 
     def _tokenize(self, text: str) -> Iterator[re.Match[str]]:
         """Yields regex matches for tokens in the C source code."""
@@ -391,6 +397,10 @@ class CObfuscator:
         mapping_info = {
             "identifier_mapping": self.mm.mapping,
             "source_encoding": self.mm.source_encoding,
+            # Integrity check: restoration compares this with the records it
+            # actually reads. A single inserted or deleted record is otherwise
+            # indistinguishable from a healthy artifact.
+            "layout_count": self._layout_count,
         }
         json_bytes = json.dumps(mapping_info).encode("utf-8")
         compressed = zlib.compress(json_bytes)
@@ -426,7 +436,7 @@ class CObfuscator:
         ]
         self._has_token_pasting = "##" in "".join(code_tokens)
         if cipher is None:
-            cipher = "stream" if encryption_key else "none"
+            cipher = "stream" if encryption_key is not None else "none"
         self._cipher = make_cipher(cipher, encryption_key) if cipher != "none" else None
 
         external_symbols = self._identify_external_symbols(
@@ -449,6 +459,7 @@ class CObfuscator:
         # Output is assembled one logical line at a time; a newline in the
         # pending layout ends the current line.
 
+        self._layout_count = 0
         output_lines = []
 
         current_line_tokens = []  # (token_str)
@@ -567,7 +578,7 @@ class CObfuscator:
                 f"({len(expected)} -> {len(actual)} tokens). "
                 "This is a Mistode bug; please report the input."
             )
-        for (kind, token), (out_kind, out_token) in zip(expected, actual):
+        for (kind, token), (out_kind, out_token) in zip(expected, actual, strict=True):
             if kind == "ident":
                 if out_kind != "ident":
                     raise ValueError(
@@ -584,6 +595,7 @@ class CObfuscator:
         # Encode layout
         json_bytes = json.dumps(layouts).encode("utf-8")
         compressed = zlib.compress(json_bytes)
+        self._layout_count += len(layouts)
         if self._cipher:
             encoded = self._cipher.encrypt(compressed)
             tag = "secure_chunk"
@@ -600,6 +612,14 @@ class CObfuscator:
         if tokens:
             output.append("".join(tokens))
 
+    # Markers are matched against COMMENT tokens only (see restore): the same
+    # text inside a string literal is program data, not layout.
+    CHUNK_PREFIXES = ("/* @mistode:chunk:", "/* @mistode:secure_chunk:")
+    METADATA_PREFIXES = (
+        "/* @mistode:metadata:",
+        "/* @mistode:secure_metadata:",
+    )
+
     def restore(  # noqa: C901
         self,
         source_code: str,
@@ -610,36 +630,57 @@ class CObfuscator:
         Restores C source code using layout chunks.
         """
         if cipher is None:
-            cipher = "stream" if encryption_key else "none"
+            cipher = "stream" if encryption_key is not None else "none"
         self._cipher = make_cipher(cipher, encryption_key) if cipher != "none" else None
+
+        lines = source_code.splitlines()
+
+        # A marker is layout data only when the lexer reports it as a comment:
+        # the same text inside a string literal is program data. The comment
+        # text itself is kept, so a marker that shares a line with code is
+        # parsed without having to re-find it in the line.
+        chunk_comments: list[str] = []
+        chunk_lines: list[int] = []
+        metadata_comments: list[str] = []
+        metadata_lines: set[int] = set()
+        line_starts: list[int] = []
+        offset = 0
+        for line in lines:
+            line_starts.append(offset)
+            offset += len(line) + 1
+
+        for match in self._tokenize(source_code):
+            if not match.group("comment"):
+                continue
+            text = match.group(0)
+            lineno = bisect.bisect_right(line_starts, match.start())
+            if text.startswith(self.CHUNK_PREFIXES):
+                chunk_comments.append(text)
+                chunk_lines.append(lineno)
+            elif text.startswith(self.METADATA_PREFIXES):
+                metadata_comments.append(text)
+                metadata_lines.add(lineno)
 
         # Extract embedded metadata for the identifier mapping, if present.
         metadata_found = False
-        metadata_match = re.search(
-            r"/\* @mistode:(secure_)?metadata:(.*?) \*/", source_code, re.DOTALL
-        )
-        if metadata_match:
-            secure = bool(metadata_match.group(1))
-            encoded_metadata = metadata_match.group(2).strip()
-            if secure:
-                if not self._cipher:
-                    raise ValueError(
-                        "File is encrypted: provide --password and the "
-                        "matching --cipher (default: stream)"
-                    )
-                decoded = self._cipher.decrypt(encoded_metadata)
-            else:
-                decoded = base64.b64decode(encoded_metadata)
-            decompressed = zlib.decompress(decoded)
-            data = json.loads(decompressed.decode("utf-8"))
+        expected_layout_count = None
+        if metadata_comments:
+            # Emitted last, so the final metadata comment is the footer.
+            comment = metadata_comments[-1]
+            secure = comment.startswith("/* @mistode:secure_metadata:")
+            prefix = (
+                "/* @mistode:secure_metadata:" if secure else "/* @mistode:metadata:"
+            )
+            encoded_metadata = comment[len(prefix) :].rstrip("\\").strip()
+            encoded_metadata = encoded_metadata.removesuffix("*/").strip()
+            data = decode_metadata(encoded_metadata, secure=secure, cipher=self._cipher)
             if not self.mm.mapping:
                 self.mm.mapping = data.get("identifier_mapping", {})
                 self.mm.reverse_mapping = {v: k for k, v in self.mm.mapping.items()}
             if data.get("source_encoding"):
                 self.mm.source_encoding = data["source_encoding"]
+            expected_layout_count = data.get("layout_count")
             metadata_found = True
-
-        lines = source_code.splitlines()
 
         # Chunks form a FIFO queue; each code token consumes one layout
         # entry, which reproduces the original whitespace/comment stream.
@@ -659,41 +700,26 @@ class CObfuscator:
 
         # Tokenize the cleaned code as one stream: per-line tokenizing would
         # split tokens that span lines (raw strings, continuations).
+        # Markers are consumed by the line their comment starts on.
+        chunk_payloads: dict[int, tuple[str, bool]] = {}
+        for comment, lineno in zip(chunk_comments, chunk_lines, strict=True):
+            secure = comment.startswith("/* @mistode:secure_chunk:")
+            prefix = "/* @mistode:secure_chunk:" if secure else "/* @mistode:chunk:"
+            payload = comment[len(prefix) :].rstrip("\\").strip()
+            payload = payload.removesuffix("*/").strip()
+            chunk_payloads[lineno] = (payload, secure)
+
         clean_lines: list[str] = []
 
-        for line in lines:
-            stripped = line.strip()
-            if "@mistode:" in stripped and (
-                "chunk:" in stripped or "secure_chunk:" in stripped
-            ):
-                # Chunk comments are emitted in block form (`/* ... */`) so
-                # they stay safe after a macro line-continuation backslash.
-                payload = stripped.split(":", 2)[2]
-                if stripped.startswith("/*"):
-                    payload = payload.rstrip("\\").strip()
-                    payload = payload.removesuffix("*/").strip()
-                try:
-                    if "secure_chunk:" in stripped:
-                        if not self._cipher:
-                            raise ValueError(
-                                "Encrypted payload: provide --password and the "
-                                "matching --cipher (default: stream)"
-                            )
-                        decoded = self._cipher.decrypt(payload)
-                    else:
-                        decoded = base64.b64decode(payload)
-                    decompressed = zlib.decompress(decoded)
-                    chunk_layouts = json.loads(decompressed.decode("utf-8"))
-                    pending_layouts.extend(chunk_layouts)
-                except ValueError:
-                    raise
-                except Exception:
-                    pass
+        for lineno, line in enumerate(lines, start=1):
+            if lineno in chunk_payloads:
+                payload, secure = chunk_payloads[lineno]
+                pending_layouts.extend(
+                    decode_layouts(payload, secure=secure, cipher=self._cipher)
+                )
                 continue
 
-            # The metadata comment was consumed by the regex above; both
-            # the plain and encrypted forms must be skipped here.
-            if "/* @mistode:" in line and "metadata:" in line:
+            if lineno in metadata_lines:
                 continue
 
             clean_lines.append(line)
@@ -702,15 +728,22 @@ class CObfuscator:
 
         # Spacing in the obfuscated code is synthetic; the original comes
         # from each layout entry's "p" prefix.
+        consumed_layouts = 0
+        unpaired_tokens = 0
         for match in self._tokenize(clean_code):
             token = match.group(0)
             if not token.strip() or match.group("comment"):
                 continue
             if not pending_layouts:
+                # A token with no layout record means a chunk went missing:
+                # its original whitespace/comments are gone. Real artifacts
+                # always pair them, so this cannot happen on a healthy file.
+                unpaired_tokens += 1
                 restored_parts.append(token)
                 continue
 
             layout = pending_layouts.pop(0)
+            consumed_layouts += 1
             restored_parts.append(layout.get("p", ""))
 
             ident = match.group("ident")
@@ -724,4 +757,46 @@ class CObfuscator:
         for layout in pending_layouts:
             restored_parts.append(layout.get("p", ""))
 
+        # Structural self-check. A healthy artifact pairs every code token
+        # with exactly one layout record and leaves at most one record over
+        # (the trailing end-of-file layout, absent when the source had no
+        # final newline). An inserted marker leaves extra records behind; a
+        # deleted one leaves tokens without layout. Both are reported rather
+        # than emitted as silently mangled source.
+        self._verify_layout_balance(
+            consumed_layouts,
+            unpaired_tokens,
+            len(pending_layouts),
+            expected_layout_count,
+        )
+
         return "".join(restored_parts)
+
+    @staticmethod
+    def _verify_layout_balance(
+        consumed: int,
+        unpaired: int,
+        leftover: int,
+        expected_total: int | None = None,
+    ) -> None:
+        """Refuse to emit output when layout records and code tokens disagree.
+
+        `expected_total` comes from the embedded metadata and is the only
+        check that catches a *single* inserted or deleted record: such a
+        change leaves a record count that a legitimate artifact can also
+        have (0 or 1 leftover records), so the pairing checks alone cannot
+        see it.
+        """
+        if unpaired:
+            raise inconsistent(f"{unpaired} code token(s) have no layout record")
+        if leftover > 1:
+            raise inconsistent(
+                f"it carries {consumed + leftover} layout record(s) for "
+                f"{consumed} code token(s)"
+            )
+        total = consumed + leftover
+        if expected_total is not None and total != expected_total:
+            raise inconsistent(
+                f"it carries {total} layout record(s) but its metadata "
+                f"declares {expected_total}"
+            )

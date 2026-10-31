@@ -56,7 +56,16 @@ line-length = 88
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "C90"]
+# `B` (bugbear), `A` (builtins shadowing) and `RUF100` (stale noqa) are clean
+# and cheap to keep clean; the rest of the bugbear-adjacent rules would each
+# need a separate cleanup pass.
+#
+# Deliberately not enabled:
+# - TRY003: it flags long inline error messages, but detailed diagnostics are
+#   a design goal here (every failure says what went wrong and what to do).
+# - RUF001/002/003: they flag the Cyrillic lookalikes in `core.py`, which are
+#   functional data for homograph detection, not typos.
+select = ["E", "F", "W", "I", "C90", "B", "A", "RUF100"]
 ignore = ["E203"]
 
 [tool.ruff.lint.per-file-ignores]

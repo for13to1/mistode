@@ -5,6 +5,8 @@ import zlib
 from io import StringIO
 from typing import Any
 
+from .payload import decode_layouts, inconsistent, not_an_artifact, untokenisable
+
 
 class LayoutEngine:
     """
@@ -12,6 +14,10 @@ class LayoutEngine:
     Separates the code logic (Keywords, Ops, Renamed Identifiers) from
     Layout (Whitespace, Comments, String Styles).
     """
+
+    # Number of layout records produced by the last obfuscation run. Embedded
+    # in the metadata so restoration can verify the artifact is intact.
+    layout_count: int = 0
 
     def obfuscate_token_stream(  # noqa: C901
         self,
@@ -22,7 +28,14 @@ class LayoutEngine:
         """Obfuscate `source_code` and interleave one layout chunk per line.
 
         `replacements` maps (line, character column) to the new identifier.
+
+        After the call, ``self.layout_count`` holds the number of layout
+        records emitted. The count is embedded in the metadata so restoration
+        can detect a chunk marker that was inserted or removed: without it, a
+        single-record change lands inside the range a legitimate artifact can
+        occupy (0 or 1 leftover records) and goes unnoticed.
         """
+        self.layout_count = 0
         source_io = StringIO(source_code)
 
         # (token_type, token_string, layout_metadata) for every kept token.
@@ -144,7 +157,7 @@ class LayoutEngine:
         FSTRING_END = tokenize.FSTRING_END
         FSTRING_MIDDLE = tokenize.FSTRING_MIDDLE
 
-        for idx, (ttype, tstring, layout_meta) in enumerate(kept_tokens):
+        for ttype, tstring, layout_meta in kept_tokens:
             if ttype == tokenize.ENDMARKER:
                 # Trailing layout: end-of-file comments and newlines.
                 if layout_meta:
@@ -283,6 +296,7 @@ class LayoutEngine:
         # Compress Layouts
         json_bytes = json.dumps(layouts).encode("utf-8")
         compressed = zlib.compress(json_bytes)
+        self.layout_count += len(layouts)
 
         if encryption_manager:
             # `secure_` prefix tells restoration the payload must be
@@ -298,130 +312,197 @@ class LayoutEngine:
         code_line = "".join(tokens)
         output_lines.append(code_line)
 
-    def restore_token_stream(  # noqa: C901
+    # Markers are matched against COMMENT tokens only (see
+    # restore_token_stream): the same text inside a string literal is program
+    # data, not layout.
+    CHUNK_PREFIXES = ("#@mistode:chunk:", "#@mistode:secure_chunk:")
+
+    def _collect_chunk_payloads(
+        self, obfuscated_code: str
+    ) -> dict[int, tuple[str, bool]]:
+        """Map the line number of each chunk marker to its payload.
+
+        Chunks are emitted one per obfuscated line. Only a real COMMENT token
+        is layout data: identical text inside a multi-line string is string
+        content, and treating it as a chunk would drop code or corrupt the
+        layout queue.
+        """
+        chunk_payloads: dict[int, tuple[str, bool]] = {}
+        try:
+            for tok in tokenize.generate_tokens(StringIO(obfuscated_code).readline):
+                if tok.type != tokenize.COMMENT:
+                    continue
+                if not tok.string.startswith(self.CHUNK_PREFIXES):
+                    continue
+                secure = tok.string.startswith("#@mistode:secure_chunk:")
+                prefix = "#@mistode:secure_chunk:" if secure else "#@mistode:chunk:"
+                chunk_payloads[tok.start[0]] = (tok.string[len(prefix) :], secure)
+        except tokenize.TokenError as exc:
+            # Without a complete token stream no marker can be trusted, and
+            # the file may still contain chunks that were simply not reached.
+            # Report the tokenising failure rather than letting the missing
+            # markers look like "this is not a Mistode artifact".
+            raise untokenisable(exc) from exc
+        return chunk_payloads
+
+    def _split_lines_and_layouts(
         self,
         obfuscated_code: str,
-        reverse_mapping: dict[str, str],
-        encryption_manager: Any | None = None,
-    ) -> str:
-        """
-        Restores original code from obfuscated code with interleaved comments.
-        """
-        result_parts = []
+        chunk_payloads: dict[int, tuple[str, bool]],
+        encryption_manager: Any | None,
+    ) -> tuple[list[str], list[dict]]:
+        """Split the artifact into clean code lines and flattened layouts.
 
-        # Chunks are emitted one per obfuscated line: split them out first,
-        # then tokenize the cleaned code and replay the layouts in order.
+        Chunk lines are dropped; the layouts they carry are decoded and
+        associated with the code line that follows them, then flattened in
+        emission order. Layouts after the last code line (end-of-file
+        whitespace) are kept.
+        """
         lines = obfuscated_code.splitlines()
 
-        clean_lines = []
-        layout_map = {}  # code_line_idx -> [layout_dicts]
+        clean_lines: list[str] = []
+        all_layouts: list[dict] = []
+        # Layouts buffered between code lines: they belong to the next one.
+        pending: list[dict] = []
 
-        current_line_idx = 0
-        current_layout_data = []
-
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("#@mistode:chunk:") or stripped.startswith(
-                "#@mistode:secure_chunk:"
-            ):
-                # Parse Layout
-                try:
-                    payload = stripped.split(":", 2)[2]
-                    if stripped.startswith("#@mistode:secure_chunk:"):
-                        if not encryption_manager:
-                            raise ValueError(
-                                "Encrypted payload: provide --password and "
-                                "the matching --cipher (default: stream)"
-                            )
-                        decoded = encryption_manager.decrypt(payload)
-                    else:
-                        decoded = base64.b64decode(payload)
-
-                    decompressed = zlib.decompress(decoded)
-                    chunk_layouts = json.loads(decompressed.decode("utf-8"))
-                    current_layout_data.extend(chunk_layouts)
-                except ValueError:
-                    # Cipher failures (missing/wrong password, tampering)
-                    # and malformed payloads must surface, not be reported
-                    # later as "file does not appear to be obfuscated".
-                    raise
-                except Exception:
-                    pass
+        for lineno, line in enumerate(lines, start=1):
+            if lineno in chunk_payloads:
+                payload, secure = chunk_payloads[lineno]
+                pending.extend(
+                    decode_layouts(payload, secure=secure, cipher=encryption_manager)
+                )
                 continue
 
             # This is a code line (or empty)
             clean_lines.append(line)
-            if current_layout_data:
-                layout_map[current_line_idx] = current_layout_data
-                current_layout_data = []  # consumed
-            current_line_idx += 1
+            if pending:
+                all_layouts.extend(pending)
+                pending = []
 
-        if current_layout_data:
-            layout_map[current_line_idx] = current_layout_data
+        # Layouts after the last code line are end-of-file whitespace.
+        all_layouts.extend(pending)
+
+        return clean_lines, all_layouts
+
+    def _replay_token_stream(
+        self,
+        clean_code: str,
+        all_layouts: list[dict],
+        reverse_mapping: dict[str, str],
+    ) -> str:
+        """Rebuild the original text by replaying layouts onto each token.
+
+        Flattened in emission order, the layouts line up 1:1 with the kept
+        tokens of the cleaned code. A mismatch means a chunk marker was
+        inserted or lost, which would silently shift every following line.
+        """
+        result_parts = []
+
+        # Tokenise up front so a file that cannot be tokenised at all is
+        # reported as such: inside the loop it would surface as a short token
+        # stream and be misreported as a missing chunk marker.
+        try:
+            tokens = list(tokenize.generate_tokens(StringIO(clean_code).readline))
+        except tokenize.TokenError as exc:
+            raise untokenisable(exc) from exc
+
+        consumed = 0
+        layout_iter = iter(all_layouts)
+
+        for tok in tokens:
+            token_type = tok.type
+            token_string = tok.string
+
+            if token_type in (tokenize.NL, tokenize.COMMENT):
+                continue
+
+            # `next(..., None)` rather than StopIteration handling: running
+            # out of layouts is reported here, not by the iterator ending.
+            meta = next(layout_iter, None)
+            if meta is None:
+                raise inconsistent("it has fewer layout records than code tokens")
+            consumed += 1
+            prefix = meta.get("p", "")
+
+            result_parts.append(prefix)
+
+            if token_type == tokenize.ENDMARKER:
+                break
+
+            content = token_string
+            if token_type == tokenize.NAME and token_string in reverse_mapping:
+                content = reverse_mapping[token_string]
+
+            # If layout specifies content (e.g. restored docstring), use it
+            if "c" in meta:
+                content = meta["c"]
+            # Restore the original newline text (e.g. `\r\n` on Windows)
+            elif "nl" in meta:
+                content = meta["nl"]
+
+            result_parts.append(content)
+
+        # At most one layout record may be left over: the trailing record
+        # carries end-of-file whitespace. More than that means extra chunk
+        # data was injected.
+        leftover = len(all_layouts) - consumed
+        if leftover > 1:
+            raise inconsistent(
+                f"it carries {len(all_layouts)} layout record(s) for "
+                f"{consumed} code token(s)"
+            )
+
+        return "".join(result_parts)
+
+    def restore_token_stream(
+        self,
+        obfuscated_code: str,
+        reverse_mapping: dict[str, str],
+        encryption_manager: Any | None = None,
+        expected_layout_count: int | None = None,
+    ) -> str:
+        """Restore original code from an artifact with interleaved comments.
+
+        `expected_layout_count` comes from the embedded metadata. When given,
+        a chunk marker that was inserted or removed is reported instead of
+        producing silently misaligned output (a single-record change falls
+        inside the range a legitimate artifact can occupy).
+        """
+        chunk_payloads = self._collect_chunk_payloads(obfuscated_code)
+
+        clean_lines, all_layouts = self._split_lines_and_layouts(
+            obfuscated_code, chunk_payloads, encryption_manager
+        )
+
+        # Every text tokenises to at least an ENDMARKER, so no layouts at all
+        # means nothing was inserted or removed: this is not an artifact, and
+        # calling it a lost chunk would send the reader hunting for one that
+        # never existed.
+        if not all_layouts:
+            raise not_an_artifact()
 
         clean_code_base = "\n".join(clean_lines)
 
-        # Code without chunks is not a Mistode artifact.
-        if clean_code_base.strip() and not layout_map:
-            raise ValueError(
-                "File does not appear to be obfuscated (no layout chunks found)."
-            )
-
         # `no_eof_nl` on the last layout means the source had no trailing
         # newline; otherwise re-add one (splitlines/join drops it).
-
-        append_newline = True
-
-        all_layouts = []
-        for idx in range(len(clean_lines) + 1):  # Covers potential trailing layout
-            if idx in layout_map:
-                all_layouts.extend(layout_map[idx])
-
-        if all_layouts:
-            last_meta = all_layouts[-1]
-            if last_meta.get("no_eof_nl"):
-                append_newline = False
+        append_newline = not all_layouts[-1].get("no_eof_nl")
 
         if append_newline:
             clean_code = clean_code_base + "\n"
         else:
             clean_code = clean_code_base
 
-        # Flattened in emission order, the layouts line up 1:1 with the
-        # kept tokens of the cleaned code.
-        try:
-            layout_iter = iter(all_layouts)
+        result = self._replay_token_stream(clean_code, all_layouts, reverse_mapping)
 
-            for tok in tokenize.generate_tokens(StringIO(clean_code).readline):
-                token_type = tok.type
-                token_string = tok.string
+        # Authoritative check: the artifact declares how many layout records
+        # it should carry, which catches what the pairing checks cannot (see
+        # CObfuscator._verify_layout_balance).
+        if expected_layout_count is not None and len(all_layouts) != (
+            expected_layout_count
+        ):
+            raise inconsistent(
+                f"it carries {len(all_layouts)} layout record(s) but its "
+                f"metadata declares {expected_layout_count}"
+            )
 
-                if token_type in (tokenize.NL, tokenize.COMMENT):
-                    continue
-
-                # Fetch layout (if available)
-                meta = next(layout_iter, {})
-                prefix = meta.get("p", "")
-
-                result_parts.append(prefix)
-
-                if token_type == tokenize.ENDMARKER:
-                    break
-
-                content = token_string
-                if token_type == tokenize.NAME and token_string in reverse_mapping:
-                    content = reverse_mapping[token_string]
-
-                # If layout specifies content (e.g. restored docstring), use it
-                if "c" in meta:
-                    content = meta["c"]
-                # Restore the original newline text (e.g. `\r\n` on Windows)
-                elif "nl" in meta:
-                    content = meta["nl"]
-
-                result_parts.append(content)
-
-        except (StopIteration, tokenize.TokenError):
-            pass
-
-        return "".join(result_parts)
+        return result

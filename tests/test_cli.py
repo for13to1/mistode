@@ -318,7 +318,7 @@ int main() {
             assert result.returncode == 0
             assert Path(key_file).exists()
         finally:
-            for file_path in [original_file]:
+            for _ in [original_file]:
                 obfuscated_file = original_file.replace(".py", ".obf.py")
                 for fp in [obfuscated_file, key_file]:
                     if Path(fp).exists():

@@ -14,8 +14,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
+import binascii
 import json
 import sys
+import zlib
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -95,10 +97,16 @@ class ObfuscationService:
         self.stats_data = {}
 
     def execute(self) -> None:
+        if self.options.password == "":
+            raise ObfuscationError(
+                "❌ Error: --password cannot be empty.\n"
+                "💡 Hint: omit --password for plain payloads, or pass a "
+                "non-empty value to encrypt."
+            )
         if (
             self.options.command == Command.OBFUSCATE
             and self.options.cipher not in (None, "none")
-            and not self.options.password
+            and self.options.password is None
         ):
             raise ObfuscationError(
                 f"❌ Error: --cipher {self.options.cipher} requires --password.\n"
@@ -145,7 +153,7 @@ class ObfuscationService:
             except SyntaxError as e:
                 raise ObfuscationError(
                     f"❌ Error: Failed to parse {options.input_file}\n💡 Details: {e}"
-                )
+                ) from e
         else:
             obfuscator = CObfuscator(self.mm, self.gen, options.input_file.name)
             try:
@@ -157,7 +165,7 @@ class ObfuscationService:
                     cipher=options.cipher,
                 )
             except ValueError as e:
-                raise ObfuscationError(f"❌ Error: {e}")
+                raise ObfuscationError(f"❌ Error: {e}") from e
 
         assert options.output_file is not None
         # Output is always UTF-8 so it runs anywhere; the original encoding
@@ -210,7 +218,7 @@ class ObfuscationService:
                     cipher=options.cipher,
                 )
         except ValueError as e:
-            raise ObfuscationError(str(e))
+            raise ObfuscationError(str(e)) from e
 
         assert options.output_file is not None
         # Restore in the original encoding (recorded in the embedded
@@ -310,7 +318,7 @@ class ObfuscationService:
                 except SyntaxError as e:
                     raise ObfuscationError(
                         f"❌ Error: Failed to parse {f}\n💡 Details: {e}"
-                    )
+                    ) from e
                 # Fold the per-file mapping into MappingManager so a
                 # project-wide key can be written once at the end.
                 self.mm.mapping.update(obfuscator.identifier_mapping)
@@ -327,7 +335,7 @@ class ObfuscationService:
                         cipher=options.cipher,
                     )
                 except ValueError as e:
-                    raise ObfuscationError(f"❌ Error: {e}")
+                    raise ObfuscationError(f"❌ Error: {e}") from e
             self._write_file(out, result)
 
         self._handle_assets(out_dir)
@@ -381,7 +389,7 @@ class ObfuscationService:
                         cipher=options.cipher,
                     )
             except ValueError as e:
-                raise ObfuscationError(str(e))
+                raise ObfuscationError(str(e)) from e
 
             restore_encoding = obfuscator.mm.source_encoding or encoding
             self._write_file(out, result, restore_encoding)
@@ -404,11 +412,11 @@ class ObfuscationService:
         """
         try:
             raw = path.read_bytes()
-        except OSError:
+        except OSError as e:
             raise FileNotFound(
                 f"❌ Error: Input file not found: {path}\n"
                 f"💡 Hint: Check if the file path is correct or use an absolute path"
-            )
+            ) from e
 
         if raw.startswith(b"\xef\xbb\xbf"):
             return "utf-8-sig"
@@ -445,25 +453,27 @@ class ObfuscationService:
             # newline="" keeps CRLF intact for bit-perfect restoration
             with open(path, "r", encoding=encoding, newline="") as f:
                 return f.read()
-        except OSError:  # Catch file not found and other OS errors
+        except OSError as e:  # Catch file not found and other OS errors
             raise FileNotFound(
                 f"❌ Error: Input file not found: {path}\n"
                 f"💡 Hint: Check if the file path is correct or use an absolute path"
-            )
-        except PermissionError:
+            ) from e
+        except PermissionError as e:
             raise FileNotFound(
                 f"❌ Error: Permission denied: {path}\n"
-                f"💡 Hint: Check file permissions or try running "  # noqa: E501
+                f"💡 Hint: Check file permissions or try running "
                 f"with appropriate rights"
-            )
-        except UnicodeDecodeError:
+            ) from e
+        except UnicodeDecodeError as e:
             raise FileNotFound(
                 f"❌ Error: File encoding issue: {path}\n"
-                f"💡 Hint: Ensure the file is a valid text file (UTF-8, GBK, "  # noqa: E501
+                f"💡 Hint: Ensure the file is a valid text file (UTF-8, GBK, "
                 f"Big5, Shift_JIS, or UTF-16)"
-            )
+            ) from e
         except Exception as e:
-            raise FileNotFound(f"❌ Error: Failed to read {path}\n💡 Details: {e}")
+            raise FileNotFound(
+                f"❌ Error: Failed to read {path}\n💡 Details: {e}"
+            ) from e
 
     def _write_file(self, path: Path, content: str, encoding: str = "utf-8") -> None:
         try:
@@ -471,40 +481,42 @@ class ObfuscationService:
             # newline="" prevents newline translation on Windows
             with open(path, "w", encoding=encoding, newline="") as f:
                 f.write(content)
-        except PermissionError:
+        except PermissionError as e:
             raise ObfuscationError(
                 f"❌ Error: Permission denied when writing: {path}\n"
-                f"💡 Hint: Check directory permissions or try a "  # noqa: E501
+                f"💡 Hint: Check directory permissions or try a "
                 f"different output location"
-            )
+            ) from e
         except OSError as e:
             raise ObfuscationError(
                 f"❌ Error: Failed to write {path}\n"
                 f"💡 Details: {e}\n"
                 f"💡 Hint: Ensure you have enough disk space and write permissions"
-            )
+            ) from e
         except Exception as e:
-            raise ObfuscationError(f"❌ Error: Failed to write {path}\n💡 Details: {e}")
+            raise ObfuscationError(
+                f"❌ Error: Failed to write {path}\n💡 Details: {e}"
+            ) from e
 
     def _load_mapping(self, key_file: Path) -> None:
         try:
             self.mm.load_mapping(key_file)
-        except OSError:  # Catch file not found and other OS errors
+        except OSError as e:  # Catch file not found and other OS errors
             raise ObfuscationError(
                 f"❌ Error: Key file not found: {key_file}\n"
-                f"💡 Hint: Ensure the key file exists or try restoration "  # noqa: E501
+                f"💡 Hint: Ensure the key file exists or try restoration "
                 f"without --key (using embedded metadata)"
-            )
-        except json.JSONDecodeError:
+            ) from e
+        except json.JSONDecodeError as e:
             raise ObfuscationError(
                 f"❌ Error: Invalid key file format: {key_file}\n"
-                f"💡 Hint: The key file may be corrupted. Try using "  # noqa: E501
+                f"💡 Hint: The key file may be corrupted. Try using "
                 f"embedded metadata instead."
-            )
+            ) from e
         except Exception as e:
             raise ObfuscationError(
                 f"❌ Error: Failed to load key file {key_file}\n💡 Details: {e}"
-            )
+            ) from e
 
     def _print_success(self, message: str) -> None:
         print(f"OK {message}")
@@ -553,7 +565,7 @@ class ObfuscationService:
         print(f"  Identifiers obfuscated: {self.stats_data['total_identifiers']}")
         if self.stats_data["preserved_identifiers"] > 0:
             print(
-                f"  Preserved identifiers: "  # noqa: E501
+                f"  Preserved identifiers: "
                 f"{self.stats_data['preserved_identifiers']} (imports/builtins)"
             )
 
@@ -563,7 +575,7 @@ class ObfuscationService:
         print(f"  Original size: {orig_kb:.2f} KB")
         print(f"  Obfuscated size: {obf_kb:.2f} KB")
         print(
-            f"  Size change: {self.stats_data['size_increase']:+d} bytes "  # noqa: E501
+            f"  Size change: {self.stats_data['size_increase']:+d} bytes "
             f"({self.stats_data['size_percent']:+.1f}%)"
         )
 
@@ -751,8 +763,8 @@ class ArgumentParser:
             ),
             password=(
                 raw.password
-                if hasattr(raw, "password")
-                else config.get("password", None)
+                if getattr(raw, "password", None) is not None
+                else config.get("password")
             ),
             cipher=(
                 raw.cipher
@@ -878,6 +890,12 @@ def run() -> None:
         sys.exit(1)
     except ObfuscationError as e:
         print(f"{e}")
+        sys.exit(1)
+    except (zlib.error, binascii.Error) as e:
+        # Payload decoding errors that escape the per-format handlers must
+        # still be a readable message, not a traceback. binascii.Error is a
+        # ValueError subclass but zlib.error is not.
+        print(f"❌ Error: corrupt or malformed payload: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nCancelled.")
